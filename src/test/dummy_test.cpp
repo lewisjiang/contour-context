@@ -25,10 +25,11 @@ int main(int argc, char **argv) {
       std::cout << out_ptr->header.seq << std::endl;
 
       ContourManagerConfig config;
-      config.lev_grads_ = {1.5, 2, 2.5, 3, 3.5, 4, 100};
+      config.lev_grads_ = {1.5, 2, 2.5, 3, 3.5, 4};
       ContourManager cmng(config);
       cmng.makeBEV<pcl::PointXYZ>(out_ptr);
-      cmng.makeContours();
+//      cmng.makeContours();
+      cmng.makeContoursRec();
     }
     rate.sleep();
   }

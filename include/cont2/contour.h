@@ -24,18 +24,17 @@
 #include <Eigen/Geometry>
 #include <Eigen/Eigenvalues>
 
-#include <opencv2/core/mat.hpp>
-#include <opencv2/core.hpp>
+#include <opencv2/core/types.hpp>
 
 typedef Eigen::Matrix<float, 2, 1> V2F;
 typedef Eigen::Matrix<float, 2, 2> M2F;
 
 
-struct RectRoi {
-  int r, c, nr, nc;
-
-  RectRoi(int r0, int c0, int nr0, int nc0) : r(r0), c(c0), nr(nr0), nc(nc0) {}
-};
+//struct RectRoi {
+//  int r, c, nr, nc;
+//
+//  RectRoi(int r0, int c0, int nr0, int nc0) : r(r0), c(c0), nr(nr0), nc(nc0) {}
+//};
 
 struct ContourViewConfig {
   int min_cell_cov_ = 4;
@@ -51,9 +50,9 @@ class ContourView {
   const ContourViewConfig cfg_;
 
   // property:
-  int level_, label_;
+  int level_;
   float h_min_, h_max_;
-  RectRoi aabb_; // axis aligned bounding box of the current contour
+  cv::Rect aabb_; // axis aligned bounding box of the current contour
 //  int poi_[2]; // a point belonging to this contour/slice
 
   // data (collected on the run)
@@ -66,7 +65,8 @@ class ContourView {
   // statistical summary
   V2F pos_mean_;
   M2F pos_cov_;
-  V2F maj_dir_; // gaussian ellipsoid axes. if ecc_feat_==false, this is meaningless
+  M2F eig_vecs_; // gaussian ellipsoid axes. if ecc_feat_==false, this is meaningless
+  V2F eig_vals_;
   float eccen_{};   // 0: circle
   float vol3_mean_{};
   V2F com_; // center of mass
@@ -82,9 +82,8 @@ class ContourView {
 
 public:
   // TODO: 0. build a contour from 3: pic, roi, height threshold. Called in manager.
-  explicit ContourView(int level, int label, float h_min, float h_max, RectRoi aabb,
-                       std::shared_ptr<ContourView> parent) : level_(level), label_(label), h_min_(h_min),
-                                                              h_max_(h_max),
+  explicit ContourView(int level, float h_min, float h_max, const cv::Rect &aabb,
+                       std::shared_ptr<ContourView> parent) : level_(level), h_min_(h_min), h_max_(h_max),
                                                               aabb_(aabb), parent_(std::move(parent)) {
     cell_pos_sum_.setZero();
     cell_pos_tss_.setZero();
@@ -100,7 +99,8 @@ public:
     cell_vol3_ += height;
     cell_vol3_torq_ += height * v_rc;
   }
-  void runningStats(float curr_row, float curr_col, float height) {   // a more accurate one with continuous coordinate
+
+  void runningStatsF(float curr_row, float curr_col, float height) {   // a more accurate one with continuous coordinate
     cell_cnt_ += 1;
     V2F v_rc(curr_row, curr_col);
     cell_pos_sum_ += v_rc;
@@ -115,28 +115,32 @@ public:
   void calcStatVals() {
     pos_mean_ = cell_pos_sum_ / cell_cnt_;
 
+    vol3_mean_ = cell_vol3_ / cell_cnt_;
+    com_ = cell_vol3_torq_ / cell_vol3_;
+
     // eccentricity:
     if (cell_cnt_ < cfg_.min_cell_cov_) {
       pos_cov_ = M2F::Ones() * cfg_.point_sigma_ * cfg_.point_sigma_;
       ecc_feat_ = false;
+      com_feat_ = false;
     } else {
       pos_cov_ = (cell_pos_tss_ - cell_pos_sum_ * pos_mean_.transpose() - pos_mean_ * cell_pos_sum_.transpose() +
                   pos_mean_ * pos_mean_.transpose()) / (cell_cnt_ - 1);
       Eigen::SelfAdjointEigenSolver<M2F> es(pos_cov_.template selfadjointView<Eigen::Upper>());
-      V2F eivals = es.eigenvalues();  // increasing order
-      if (eivals(0) < cfg_.point_sigma_)  // determine if eccentricity feat using another function
-        eivals(0) = cfg_.point_sigma_;
-      if (eivals(1) < cfg_.point_sigma_)
-        eivals(1) = cfg_.point_sigma_;
-      eccen_ = std::sqrt(eivals(1) * eivals(1) - eivals(0) * eivals(0)) / eivals(1);
-      maj_dir_ = es.eigenvectors().col(1);
+      eig_vals_ = es.eigenvalues();  // increasing order
+      if (eig_vals_(0) < cfg_.point_sigma_)  // determine if eccentricity feat using another function
+        eig_vals_(0) = cfg_.point_sigma_;
+      if (eig_vals_(1) < cfg_.point_sigma_)
+        eig_vals_(1) = cfg_.point_sigma_;
+      eccen_ = std::sqrt(eig_vals_(1) * eig_vals_(1) - eig_vals_(0) * eig_vals_(0)) / eig_vals_(1);
+      eig_vecs_ = es.eigenvectors();
+
       ecc_feat_ = eccentricitySalient();
+
+      // vol/weight of mountain:
+      com_feat_ = centerOfMassSalient();
     }
 
-    // vol/weight of mountain:
-    vol3_mean_ = cell_vol3_ / cell_cnt_;
-    com_ = cell_vol3_torq_ / cell_vol3_;
-    com_feat_ = centerOfMassSalient();
   }
 
   // TODO
@@ -160,6 +164,15 @@ public:
   // TODO: 4. add two contours
   static ContourView addContours(const ContourView &cont1, const ContourView &cont2) {
     CHECK_EQ(cont1.level_, cont2.level_);
+  }
+
+  // getter setter
+  int getArea() const {
+    return cell_cnt_;
+  }
+
+  void addChildren(std::shared_ptr<ContourView> &chd) {
+    children_.push_back(chd);
   }
 
   // auxiliary functions
