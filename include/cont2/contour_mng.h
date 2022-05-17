@@ -5,6 +5,9 @@
 #ifndef CONT2_CONTOUR_MNG_H
 #define CONT2_CONTOUR_MNG_H
 
+#include <iostream>
+#include <fstream>
+#include <cstdlib>
 #include "cont2/contour.h"
 
 #include <pcl/point_cloud.h>
@@ -14,7 +17,9 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
-#include "opencv2/imgproc.hpp"
+#include <opencv2/imgproc.hpp>
+
+#include "tools/bm_util.h"
 
 struct ContourManagerConfig {
   std::vector<float> lev_grads_;  // n marks, n+1 levels
@@ -39,7 +44,8 @@ class ContourManager {
   std::string str_id;
 
   // data
-  std::vector<std::vector<std::shared_ptr<ContourView>>> cont_views_;  // TODO: use a parallel vec of vec for points
+  std::vector<std::vector<std::shared_ptr<ContourView>>> cont_views_;  // TODO: use a parallel vec of vec for points?
+  std::vector<int> layer_cell_cnt_;  // total number of cells in each layer/level
   cv::Mat1f bev_;
   std::vector<std::vector<V2F>> c_height_position_;  // downsampled but not discretized point xy position, another bev
   float max_bin_val_ = -VAL_ABS_INF_, min_bin_val_ = VAL_ABS_INF_;
@@ -81,8 +87,8 @@ protected:
     return continuous_rc;
   }
 
-  void makeContourRecursive(const cv::Rect &cc_roi, const cv::Mat1b &cc_mask, int level,
-                            const std::shared_ptr<ContourView> &parent) {
+  void makeContourRecursiveHelper(const cv::Rect &cc_roi, const cv::Mat1b &cc_mask, int level,
+                                  const std::shared_ptr<ContourView> &parent) {
     DCHECK(bool(level)==bool(parent));
     if (level >= cfg_.lev_grads_.size())
       return;
@@ -110,7 +116,7 @@ protected:
     // 3. create contours for each connected component
     // https://stackoverflow.com/questions/37745274/opencv-find-perimeter-of-a-connected-component/48618464#48618464
     for (int n = 1; n < stats.rows; n++) {  // n=0: background
-      printf("Area: %d\n", stats.at<int>(n, cv::CC_STAT_AREA));
+//      printf("Area: %d\n", stats.at<int>(n, cv::CC_STAT_AREA));
 
       //Rectangle around the connected component
       // Rect: col0, row0, n_col, n_row
@@ -124,19 +130,19 @@ protected:
       for (int i = 0; i < rect_l.height; i++)
         for (int j = 0; j < rect_l.width; j++)
           if (mask_n(i, j))
-            ptr_tmp_cv->runningStats(i + cc_roi.y, j + cc_roi.x, bev_(i, j));
+            ptr_tmp_cv->runningStats(i + rect_g.y, j + rect_g.x, bev_(i + rect_g.y, j + rect_g.x));
 
       ptr_tmp_cv->calcStatVals();
-      DCHECK(ptr_tmp_cv->getArea() == stats(n, 4));
+      DCHECK(ptr_tmp_cv->cell_cnt_ == stats(n, 4));
       cont_views_[level].emplace_back(ptr_tmp_cv);    // add to the manager's matrix
       if (parent)
-        parent->addChildren(ptr_tmp_cv);
+        parent->children_.emplace_back(ptr_tmp_cv);
 
       // recurse
       // Get the mask for the contour
 
-      printf("contour ROI: %d, %d, level: %d\n", mask_n.rows, mask_n.cols, level);
-      makeContourRecursive(rect_g, mask_n, level + 1, ptr_tmp_cv);
+//      printf("contour ROI: %d, %d, level: %d\n", mask_n.rows, mask_n.cols, level);
+      makeContourRecursiveHelper(rect_g, mask_n, level + 1, ptr_tmp_cv);
 
 //      if (level == 2) {
 //        cv::bitwise_or(mask_n, visualization(rect_g), visualization(rect_g));
@@ -161,6 +167,7 @@ public:
 //    std::cout << bev_ << std::endl;
     c_height_position_ = std::vector<std::vector<V2F>>(cfg_.n_row_, std::vector<V2F>(cfg_.n_col_, V2F::Zero()));
     cont_views_.resize(cfg_.lev_grads_.size());
+    layer_cell_cnt_.resize(cfg_.lev_grads_.size());
 
   }
 
@@ -194,11 +201,40 @@ public:
     cv::imwrite("cart_context-" + str_id + ".png", view);
   }
 
-  void makeContoursRec() {
+  void makeContoursRecurs() {
     cv::Rect full_bev(0, 0, bev_.cols, bev_.rows);
     visualization = cv::Mat::zeros(cfg_.n_row_, cfg_.n_col_, CV_8U);
 
-    makeContourRecursive(full_bev, cv::Mat1b(1, 1), 0, nullptr);
+    TicToc clk;
+    makeContourRecursiveHelper(full_bev, cv::Mat1b(1, 1), 0, nullptr);
+    std::cout << "Time makecontour: " << clk.toc() << std::endl;
+
+    for (int i = 0; i < cont_views_.size(); i++) {
+      std::sort(cont_views_[i].begin(), cont_views_[i].end(),
+                [&](const std::shared_ptr<ContourView> &p1, const std::shared_ptr<ContourView> &p2) -> bool {
+                  return p1->cell_cnt_ > p2->cell_cnt_;
+                });   // bigger contours first. Or heavier first?
+      layer_cell_cnt_[i] = 0;
+      for (int j = 0; j < cont_views_[i].size(); j++) {
+        layer_cell_cnt_[i] += cont_views_[i][j]->cell_cnt_;
+      }
+    }
+
+    // print top 2 features in each
+    for (int i = 0; i < cfg_.lev_grads_.size(); i++) {
+      printf("\nLevel %d top 2 statistics:\n", i);
+      for (int j = 0; j < std::min(2lu, cont_views_[i].size()); j++) {
+        printf("# %d:\n", j);
+        std::cout << "Cell count " << cont_views_[i][j]->cell_cnt_ << std::endl;
+        std::cout << "Eigen Vals " << cont_views_[i][j]->eig_vals_.transpose() << std::endl;
+        std::cout << "com - cent " << (cont_views_[i][j]->com_ - cont_views_[i][j]->pos_mean_).transpose() << std::endl;
+        std::cout << "Total vol  " << cont_views_[i][j]->cell_vol3_ << std::endl;
+      }
+    }
+
+    // save statistics of this scan:
+    std::string fpath = std::string(PJSRCDIR) + "/results/contours_orig_" + str_id + ".txt";
+    saveContours(fpath);
 
 //    cv::imwrite("cart_context-mask-" + std::to_string(3) + "-" + str_id + "rec.png", visualization);
 //    for (const auto &x: cont_views_) {
@@ -253,7 +289,7 @@ public:
               ptr_tmp_cv->runningStats(i, j, bev_(i, j));
 
           ptr_tmp_cv->calcStatVals();
-          DCHECK(ptr_tmp_cv->getArea() == stats(n, 4));
+          DCHECK(ptr_tmp_cv->cell_cnt_ == stats(n, 4));
           level_conts.emplace_back(ptr_tmp_cv);
         }
         cont_views_.emplace_back(level_conts);
@@ -268,6 +304,48 @@ public:
       lev++;
 //      h_min = cap;
     }
+  }
+
+  // util functions
+  void saveContours(const std::string &fpath) const {
+    // 0:level, 1:cell_cnt, 2:pos_mean, 4:pos_cov, 8:eig_vals, eig_vecs(10), 14:eccen, 15:vol3_mean, 16:com, 18,19:..
+    // Note that recording data as strings has accuracy loss
+//    std::string fpath = sav_dir + "/contours_" + str_id + ".txt";
+    std::fstream res_file(fpath, std::ios::out);
+
+    if (res_file.rdstate() != std::ifstream::goodbit) {
+      std::cerr << "Error opening " << fpath << std::endl;
+      return;
+    }
+    printf("Writing results to file \"%s\" \n", fpath.c_str());
+    res_file << "\nDATA_START\n";
+    for (const auto &layer: cont_views_) {
+      for (const auto &cont: layer) {
+        res_file << cont->level_ << '\t';
+        res_file << cont->cell_cnt_ << '\t';
+
+        res_file << cont->pos_mean_.x() << '\t' << cont->pos_mean_.y() << '\t';
+        for (int i = 0; i < 4; i++)
+          res_file << cont->pos_cov_.data()[i] << '\t';
+
+        res_file << cont->eig_vals_.x() << '\t' << cont->eig_vals_.y() << '\t';
+        for (int i = 0; i < 4; i++)
+          res_file << cont->eig_vecs_.data()[i] << '\t';
+
+        res_file << cont->eccen_ << '\t';
+        res_file << cont->vol3_mean_ << '\t';
+        res_file << cont->com_.x() << '\t' << cont->com_.y() << '\t';
+
+        res_file << int(cont->ecc_feat_) << '\t';
+        res_file << int(cont->com_feat_) << '\t';
+
+        res_file << '\n';
+      }
+    }
+    res_file << "DATA_END\n";
+    res_file.close();
+    printf("Writing results finished.\n");
+
   }
 
 };

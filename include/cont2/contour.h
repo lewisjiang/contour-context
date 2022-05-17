@@ -28,6 +28,8 @@
 
 typedef Eigen::Matrix<float, 2, 1> V2F;
 typedef Eigen::Matrix<float, 2, 2> M2F;
+typedef Eigen::Matrix<double, 2, 1> V2D;
+typedef Eigen::Matrix<double, 2, 2> M2D;
 
 
 //struct RectRoi {
@@ -38,10 +40,11 @@ typedef Eigen::Matrix<float, 2, 2> M2F;
 
 struct ContourViewConfig {
   int min_cell_cov_ = 4;
-  float point_sigma_ = 1.5; // have nothing to do with resolution: on pixel only
+  float point_sigma_ = 1.0; // have nothing to do with resolution: on pixel only
 };
 
 class ContourView {
+public:
   // Coordinate definition:
   //  row as x, col as y, center of pixel(0,0) as origin.
   //  Use (row, col) to access all the image data
@@ -57,19 +60,19 @@ class ContourView {
 
   // data (collected on the run)
   int cell_cnt_{};
-  V2F cell_pos_sum_;
-  M2F cell_pos_tss_;
+  V2D cell_pos_sum_;
+  M2D cell_pos_tss_;
   float cell_vol3_{};  // or "weight" of the elevation mountain. Should we include volumns under the h_min_?
-  V2F cell_vol3_torq_;
+  V2D cell_vol3_torq_;
 
   // statistical summary
-  V2F pos_mean_;
-  M2F pos_cov_;
-  M2F eig_vecs_; // gaussian ellipsoid axes. if ecc_feat_==false, this is meaningless
-  V2F eig_vals_;
+  V2D pos_mean_;
+  M2D pos_cov_;
+  V2D eig_vals_;
+  M2D eig_vecs_; // gaussian ellipsoid axes. if ecc_feat_==false, this is meaningless
   float eccen_{};   // 0: circle
   float vol3_mean_{};
-  V2F com_; // center of mass
+  V2D com_; // center of mass
   bool ecc_feat_ = false;   // eccentricity large enough (with enough cell count)
   bool com_feat_ = false;   // com not at fitted geometric center
 
@@ -92,8 +95,10 @@ public:
 
   // TODO: call this function everytime encounters a pixel belonging to this connected component
   void runningStats(int curr_row, int curr_col, float height) {
+    DCHECK_GE(curr_row, -0.5f);
+    DCHECK_GE(curr_col, -0.5f);
     cell_cnt_ += 1;
-    V2F v_rc(curr_row, curr_col);
+    V2D v_rc(curr_row, curr_col);
     cell_pos_sum_ += v_rc;
     cell_pos_tss_ += v_rc * v_rc.transpose();
     cell_vol3_ += height;
@@ -101,8 +106,10 @@ public:
   }
 
   void runningStatsF(float curr_row, float curr_col, float height) {   // a more accurate one with continuous coordinate
+    DCHECK_GE(curr_row, -0.5f);
+    DCHECK_GE(curr_col, -0.5f);
     cell_cnt_ += 1;
-    V2F v_rc(curr_row, curr_col);
+    V2D v_rc(curr_row, curr_col);
     cell_pos_sum_ += v_rc;
     cell_pos_tss_ += v_rc * v_rc.transpose();
     cell_vol3_ += height;
@@ -120,13 +127,15 @@ public:
 
     // eccentricity:
     if (cell_cnt_ < cfg_.min_cell_cov_) {
-      pos_cov_ = M2F::Ones() * cfg_.point_sigma_ * cfg_.point_sigma_;
+      pos_cov_ = M2D::Identity() * cfg_.point_sigma_ * cfg_.point_sigma_;
+      eig_vals_ = V2D(cfg_.point_sigma_, cfg_.point_sigma_);
+      eig_vecs_.setIdentity();
       ecc_feat_ = false;
       com_feat_ = false;
     } else {
       pos_cov_ = (cell_pos_tss_ - cell_pos_sum_ * pos_mean_.transpose() - pos_mean_ * cell_pos_sum_.transpose() +
-                  pos_mean_ * pos_mean_.transpose()) / (cell_cnt_ - 1);
-      Eigen::SelfAdjointEigenSolver<M2F> es(pos_cov_.template selfadjointView<Eigen::Upper>());
+                  pos_mean_ * pos_mean_.transpose() * cell_cnt_) / (cell_cnt_ - 1);
+      Eigen::SelfAdjointEigenSolver<M2D> es(pos_cov_.template selfadjointView<Eigen::Upper>());
       eig_vals_ = es.eigenvalues();  // increasing order
       if (eig_vals_(0) < cfg_.point_sigma_)  // determine if eccentricity feat using another function
         eig_vals_(0) = cfg_.point_sigma_;
@@ -157,7 +166,8 @@ public:
   // TODO: 3. check if two contours can be accepted as from the same heatmap peak, and return the transform
   // This is one of the checks for consensus (distributional), the other one is constellation
   // T_tgt = T_delta * T_src
-  static std::pair<Eigen::Isometry2f, bool> checkCorresp(const ContourView &cont_src, const ContourView &cont_tgt) {
+  static std::pair<Eigen::Isometry2d, bool> checkCorresp(const ContourView &cont_src, const ContourView &cont_tgt) {
+    // very loose
     return {};
   }
 
@@ -167,13 +177,13 @@ public:
   }
 
   // getter setter
-  int getArea() const {
-    return cell_cnt_;
-  }
+//  int getArea() const {
+//    return cell_cnt_;
+//  }
 
-  void addChildren(std::shared_ptr<ContourView> &chd) {
-    children_.push_back(chd);
-  }
+//  void addChildren(std::shared_ptr<ContourView> &chd) {
+//    children_.push_back(chd);
+//  }
 
   // auxiliary functions
   // 1. get the position of all contour pixels
