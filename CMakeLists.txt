@@ -2,7 +2,11 @@ cmake_minimum_required(VERSION 3.0.2)
 project(cont2)
 
 #set(CMAKE_BUILD_TYPE "Release")
+
 set(CMAKE_BUILD_TYPE "Debug")
+# Enable debug flags (use if you want to debug in gdb)
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -Wall")
+
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14 -Wuninitialized")
 
@@ -41,7 +45,7 @@ find_package(Ceres REQUIRED)
 
 include_directories(
         include
-         ${glog_INCLUDE_DIRS}
+        ${glog_INCLUDE_DIRS}
         ${catkin_INCLUDE_DIRS}
         ${EIGEN3_INCLUDE_DIR}
         ${PCL_INCLUDE_DIRS}
@@ -61,24 +65,25 @@ catkin_package(
         INCLUDE_DIRS include
 )
 
-# map library
-#add_library(${PROJECT_NAME}map
-#        src/map/mapmng.cpp
-#        src/map/octree.cpp
-#        )
+# contour library
+add_library(${PROJECT_NAME}contops
+        src/cont2/contour.cpp
+        src/cont2/contour_mng.cpp
+        src/cont2/contour_db.cpp
+        )
 
-#target_link_libraries(${PROJECT_NAME}map
-#        ${catkin_LIBRARIES}
-#        ${PCL_LIBRARIES}
-#        glog::glog
-#        )
+target_link_libraries(${PROJECT_NAME}contops
+        ${catkin_LIBRARIES}
+        ${PCL_LIBRARIES}
+        ${glog_LIBRARIES}
+        )
 
 ### 0. dummy test of the project
 add_executable(${PROJECT_NAME}_dummy_test
         src/test/dummy_test.cpp
         )
 target_link_libraries(${PROJECT_NAME}_dummy_test
-        #        ${PROJECT_NAME}map
+        ${PROJECT_NAME}contops
         ${glog_LIBRARIES}
         ${catkin_LIBRARIES}
         ${PCL_LIBRARIES}
@@ -98,14 +103,14 @@ target_link_libraries(${PROJECT_NAME}_connect_test
         ${OpenCV_LIBS}
         )
 
-add_executable(${PROJECT_NAME}_ros_lidar_test
-        src/test/dummy_test.cpp
-        )
-target_link_libraries(${PROJECT_NAME}_ros_lidar_test
-        #        ${PROJECT_NAME}map
-        ${glog_LIBRARIES}
-        ${catkin_LIBRARIES}
-        ${PCL_LIBRARIES}
-        ${OpenCV_LIBS}
-        )
+#add_executable(${PROJECT_NAME}_ros_lidar_test
+#        src/test/dummy_test.cpp
+#        )
+#target_link_libraries(${PROJECT_NAME}_ros_lidar_test
+#        #        ${PROJECT_NAME}map
+#        ${glog_LIBRARIES}
+#        ${catkin_LIBRARIES}
+#        ${PCL_LIBRARIES}
+#        ${OpenCV_LIBS}
+#        )
 

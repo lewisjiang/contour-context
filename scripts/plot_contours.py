@@ -92,19 +92,32 @@ def plot_contours(raw_data=None, levels=None, legends=()):
     used_colors = []
 
     for i in range(len(raw_data)):
-        prog = (i + 0.5) / len(raw_data)
-        used_colors.append(cmap(prog))
+        data_color = cmap((i + 0.5) / len(raw_data))
+        used_colors.append(data_color)
+        level_beg = 0
+        last_level = -1
         for j in range(raw_data[i].shape[0]):
             raw_level = int(raw_data[i][j, 0])
             if raw_level not in levels:
                 continue
+            if raw_level != last_level:
+                level_beg = j
+                last_level = raw_level
             mean_xy = raw_data[i][j, 2:4]
             # cov_xy = raw_data[i][j, 4:8].reshape((2, 2)).T  # raw cov, some data maybe invisible, since a line
             J = np.diag(raw_data[i][j, 8:10])
             V = raw_data[i][j, 10:14].reshape((2, 2,)).T
             cov_xy = V @ J @ V.T
-            confidence_ellipse_fromcov_2d(cov_xy, mean_xy, axs[level_map[raw_level]], 2.0, edgecolor=cmap(prog),
+
+            confidence_ellipse_fromcov_2d(cov_xy, mean_xy, axs[level_map[raw_level]], 2.0, edgecolor=data_color,
                                           linestyle='--')
+            # 0. text: ranking in all contours of the scan
+            # axs[level_map[raw_level]].text(mean_xy[0], mean_xy[1], str(j), color=data_color, fontsize=6)
+            # 1. text: the cell count ranking place of the data
+            if j - level_beg < 9:
+                axs[level_map[raw_level]].text(mean_xy[0], mean_xy[1], str(j - level_beg), color=data_color, fontsize=6)
+            # 2. text: the area
+            # axs[level_map[raw_level]].text(mean_xy[0], mean_xy[1], str(raw_data[i][j,1]), color=data_color, fontsize=6)
 
     border = [0, 100, 0, 100]
     for i in range(len(levels)):
@@ -126,19 +139,21 @@ def plot_contours(raw_data=None, levels=None, legends=()):
 
 
 if __name__ == "__main__":
-    f1 = "../results/contours_orig_1317357625557814.txt"
+    f1 = "../results/contours_orig_1317357625557814.txt"   # -s 0
     f2 = "../results/contours_orig_1317357625661737.txt"
 
     f91 = "../results/contours_orig_1317357736560660.txt"
-    f92 = "../results/contours_orig_1317357736664336.txt"
+    f92 = "../results/contours_orig_1317357736664336.txt"  # -s 111.1
 
     # data_names = ("t=0", "t=1", "t=91", "t=92")
     data_names = ("t=0", "t=92")
+    # data_names = ("t=0", "t=1")
 
-    # dat1 = read_data_from_file(f1)
-    dat2 = read_data_from_file(f2)
+    dat1 = read_data_from_file(f1)
+    # dat2 = read_data_from_file(f2)
     # dat3 = read_data_from_file(f91)
     dat4 = read_data_from_file(f92)
 
     # plot_contours([dat1, dat2, dat3, dat4], [2, 3, 4], data_names)
-    plot_contours([dat2, dat4], [1, 2, 3, 4], data_names)
+    plot_contours([dat1, dat4], [0, 1, 2, 3, 4, 5], data_names)
+    # plot_contours([dat1, dat2], [1, 2, 3, 4], data_names)

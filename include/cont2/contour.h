@@ -26,6 +26,8 @@
 
 #include <opencv2/core/types.hpp>
 
+#include "tools/algos.h"
+
 typedef Eigen::Matrix<float, 2, 1> V2F;
 typedef Eigen::Matrix<float, 2, 2> M2F;
 typedef Eigen::Matrix<double, 2, 1> V2D;
@@ -40,7 +42,8 @@ typedef Eigen::Matrix<double, 2, 2> M2D;
 
 struct ContourViewConfig {
   int min_cell_cov_ = 4;
-  float point_sigma_ = 1.0; // have nothing to do with resolution: on pixel only
+  double point_sigma_ = 1.0; // have nothing to do with resolution: on pixel only
+  double com_bias_thres = 0.5;  // com dist from geometric center
 };
 
 class ContourView {
@@ -153,22 +156,63 @@ public:
   }
 
   // TODO
-  bool eccentricitySalient() {
-    return false;
+  inline bool eccentricitySalient() {
+    return cell_cnt_ > 5 && diff_perc(eig_vals_(0), eig_vals_(1), 0.2) && eig_vals_(1) > 2.5;
+  }
+
+  // TODO: should have sth to do with total area
+  inline bool centerOfMassSalient() const {
+    return (com_ - pos_mean_).norm() > cfg_.com_bias_thres;
   }
 
   // TODO
-  bool centerOfMassSalient() {
+  bool orietSalient() {
     return false;
   }
 
 
-  // TODO: 3. check if two contours can be accepted as from the same heatmap peak, and return the transform
+  // TODO: 3. return true if two contours can be accepted as from the same heatmap peak
+  //  use normalized L2E as similarity score?
   // This is one of the checks for consensus (distributional), the other one is constellation
   // T_tgt = T_delta * T_src
-  static std::pair<Eigen::Isometry2d, bool> checkCorresp(const ContourView &cont_src, const ContourView &cont_tgt) {
+//  static std::pair<Eigen::Isometry2d, bool> checkCorresp(const ContourView &cont_src, const ContourView &cont_tgt) {
+  static bool checkSim(const ContourView &cont_src, const ContourView &cont_tgt) {
     // very loose
-    return {};
+    // TODO: more rigorous criteria (fewer branch, faster speed)
+//    std::pair<Eigen::Isometry2d, bool> ret(Eigen::Isometry2d(), false);
+    bool ret = false;
+    // 1. area, 2.3. eig, 4. com;
+    if (diff_perc(cont_src.cell_cnt_, cont_tgt.cell_cnt_, 0.2)) {
+      printf("\tCell cnt not pass.\n");
+      return ret;
+    }
+
+    if (std::max(cont_src.cell_cnt_, cont_tgt.cell_cnt_) > 15 &&
+        diff_delt(cont_src.vol3_mean_, cont_tgt.vol3_mean_, 0.3)) {
+      printf("\tAvg height not pass.\n");
+      return ret;
+    }
+
+    if (std::max(cont_src.eig_vals_(1), cont_tgt.eig_vals_(1)) > 2.0 &&
+        diff_perc(std::sqrt(cont_src.eig_vals_(1)), std::sqrt(cont_tgt.eig_vals_(1)), 0.2)) {
+      printf("\tBig eigval not pass.\n");
+      return ret;
+    }
+
+    if (std::max(cont_src.eig_vals_(0), cont_tgt.eig_vals_(0)) > 1.0 &&
+        diff_perc(std::sqrt(cont_src.eig_vals_(0)), std::sqrt(cont_tgt.eig_vals_(0)), 0.2)) {
+      printf("\tSmall eigval not pass.\n");
+      return ret;
+    }
+
+    if (std::max((cont_src.com_ - cont_src.pos_mean_).norm(), (cont_tgt.com_ - cont_tgt.pos_mean_).norm()) > 0.5 &&
+        diff_perc((cont_src.com_ - cont_src.pos_mean_).norm(), (cont_tgt.com_ - cont_tgt.pos_mean_).norm(), 0.25)) {
+      printf("\tCom radius not pass.\n");
+      return ret;
+    }
+
+    ret = true;
+    return ret;
   }
 
   // TODO: 4. add two contours

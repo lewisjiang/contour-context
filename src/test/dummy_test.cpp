@@ -12,8 +12,9 @@ int main(int argc, char **argv) {
 
   Cont2_ROS_IO<pcl::PointXYZ> ros_io(0, "/velodyne_points", nh);
 
+  std::vector<ContourManager> scans;
 
-  ros::Rate rate(5);
+  ros::Rate rate(20);
   int cnt = 0;
   while (ros::ok()) {
     ros::spinOnce();
@@ -29,7 +30,18 @@ int main(int argc, char **argv) {
       ContourManager cmng(config);
       cmng.makeBEV<pcl::PointXYZ>(out_ptr);
 //      cmng.makeContours();
-      cmng.makeContoursRec();
+      cmng.makeContoursRecurs();
+      scans.emplace_back(cmng);
+      if (scans.size() > 1) {
+        for (int i = 0; i < scans.size(); i++) {
+          for (int j = 0; j < i; j++) {
+            printf("Match old: %d with new: %d:", j, i);
+            TicToc clk_match_once;
+            ContourManager::calcScanCorresp(scans[j], scans[i]);
+            printf("Match once time: %f\n", clk_match_once.toc());
+          }
+        }
+      }
     }
     rate.sleep();
   }
