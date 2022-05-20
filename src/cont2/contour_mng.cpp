@@ -49,7 +49,7 @@ void ContourManager::makeContours() {
 //    float h_min = -VAL_ABS_INF_;
   cv::Mat last_label_img;
   int lev = 0;
-  for (const auto &h_min: cfg_.lev_grads_) {
+  for (const auto &h_min: cfg_.lv_grads_) {
     printf("Height [%f, +]\n", h_min);
     // clamp image
     if (cont_views_.empty()) {

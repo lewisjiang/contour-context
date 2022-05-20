@@ -78,11 +78,11 @@ target_link_libraries(${PROJECT_NAME}contops
         ${glog_LIBRARIES}
         )
 
-### 0. dummy test of the project
-add_executable(${PROJECT_NAME}_dummy_test
-        src/test/dummy_test.cpp
+### 0. rosbag play test of the project
+add_executable(${PROJECT_NAME}_bag_play_test
+        src/test/bag_play_test.cpp
         )
-target_link_libraries(${PROJECT_NAME}_dummy_test
+target_link_libraries(${PROJECT_NAME}_bag_play_test
         ${PROJECT_NAME}contops
         ${glog_LIBRARIES}
         ${catkin_LIBRARIES}

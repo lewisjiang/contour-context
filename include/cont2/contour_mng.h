@@ -26,7 +26,7 @@ struct RetrievalKey {
 };
 
 struct ContourManagerConfig {
-  std::vector<float> lev_grads_;  // n marks, n+1 levels
+  std::vector<float> lv_grads_;  // n marks, n+1 levels
   //
   float reso_row_ = 2.0f, reso_col_ = 2.0f;
   int n_row_ = 100, n_col_ = 100;
@@ -95,10 +95,10 @@ protected:
   void makeContourRecursiveHelper(const cv::Rect &cc_roi, const cv::Mat1b &cc_mask, int level,
                                   const std::shared_ptr<ContourView> &parent) {
     DCHECK(bool(level)==bool(parent));
-    if (level >= cfg_.lev_grads_.size())
+    if (level >= cfg_.lv_grads_.size())
       return;
 
-    float h_min = cfg_.lev_grads_[level], h_max = VAL_ABS_INF_;
+    float h_min = cfg_.lv_grads_[level], h_max = VAL_ABS_INF_;
 
     cv::Mat1f bev_roi = bev_(cc_roi), thres_roi;
     cv::threshold(bev_roi, thres_roi, h_min, 255, cv::THRESH_BINARY);
@@ -110,8 +110,8 @@ protected:
 //      cv::bitwise_and(bin_bev_roi, bin_bev_roi, bin_bev_roi, cc_mask);  // Wrong method: some pixels may be unaltered since neglected by mask
       cv::bitwise_and(bin_bev_roi, cc_mask, bin_bev_roi);
 
-    if (level < cfg_.lev_grads_.size() - 1)
-      h_max = cfg_.lev_grads_[level - 1];
+    if (level < cfg_.lv_grads_.size() - 1)
+      h_max = cfg_.lv_grads_[level - 1];
 
     // 2. calculate connected blobs
     cv::Mat1i labels, stats;  // int (CV_32S)
@@ -163,7 +163,7 @@ public:
   explicit ContourManager(const ContourManagerConfig &config) : cfg_(config) {
     CHECK(cfg_.n_col_ % 2 == 0);
     CHECK(cfg_.n_row_ % 2 == 0);
-    DCHECK(!cfg_.lev_grads_.empty());
+    DCHECK(!cfg_.lv_grads_.empty());
 
     x_min_ = -(cfg_.n_row_ / 2) * cfg_.reso_row_;
     x_max_ = -x_min_;
@@ -173,8 +173,8 @@ public:
     bev_ = cv::Mat::ones(cfg_.n_row_, cfg_.n_col_, CV_32F) * (-VAL_ABS_INF_);
 //    std::cout << bev_ << std::endl;
     c_height_position_ = std::vector<std::vector<V2F>>(cfg_.n_row_, std::vector<V2F>(cfg_.n_col_, V2F::Zero()));
-    cont_views_.resize(cfg_.lev_grads_.size());
-    layer_cell_cnt_.resize(cfg_.lev_grads_.size());
+    cont_views_.resize(cfg_.lv_grads_.size());
+    layer_cell_cnt_.resize(cfg_.lv_grads_.size());
 
   }
 
@@ -228,7 +228,7 @@ public:
     }
 
     // print top 2 features in each
-//    for (int i = 0; i < cfg_.lev_grads_.size(); i++) {
+//    for (int i = 0; i < cfg_.lv_grads_.size(); i++) {
 //      printf("\nLevel %d top 2 statistics:\n", i);
 //      for (int j = 0; j < std::min(2lu, cont_views_[i].size()); j++) {
 //        printf("# %d:\n", j);
@@ -281,7 +281,7 @@ public:
                                                    {2, 3}};  // in accordance with num_src_top
 
     std::pair<Eigen::Isometry2d, bool> ret{};
-    int num_levels = src.cont_views_.size();
+    int num_levels = src.cont_views_.size()-2;
     for (int l = 0; l < num_levels; l++) {
       if (src.cont_views_[l].size() < num_src_top || tgt.cont_views_[l].size() < 3)
         continue;
@@ -297,7 +297,7 @@ public:
             const auto sc1 = src.cont_views_[l][comb.first], sc2 = src.cont_views_[l][comb.second],
                 tc1 = tgt.cont_views_[l][i], tc2 = tgt.cont_views_[l][j];
 
-            printf("-- Check src: %d, %d, tgt: %d, %d\n", comb.first, comb.second, i, j);
+//            printf("-- Check src: %d, %d, tgt: %d, %d\n", comb.first, comb.second, i, j);
 
             // 1. test if the proposal fits in terms of individual contours
             bool is_pairs_sim = ContourView::checkSim(*sc1, *tc1) && ContourView::checkSim(*sc2, *tc2);
@@ -362,13 +362,13 @@ public:
                     )
                   continue;
                 // handle candidate pairs
-                // TODO: check consensus and add:
+                // TODO: check consensus before adding:
                 match_list.emplace_back(ii, jj);
                 used_src.insert(ii);  // greedy
                 used_tgt.insert(jj);
 
                 // TODO: update transform
-                // pure point: umeyama
+                // pure point method: umeyama
 
                 pointset1.conservativeResize(Eigen::NoChange_t(), match_list.size());
                 pointset2.conservativeResize(Eigen::NoChange_t(), match_list.size());
@@ -381,16 +381,25 @@ public:
             }
 
 
-            // TODO: metric results
-            printf("Found matched pairs in level %d:\n", l);
-            for (const auto &pr: match_list) {
-              printf("\tsrc:tgt  %d: %d\n", pr.first, pr.second);
+            // TODO: metric results, filter out some outlier
+            if (match_list.size() > 4) {
+              printf("Found matched pairs in level %d:\n", l);
+              for (const auto &pr: match_list) {
+                printf("\tsrc:tgt  %d: %d\n", pr.first, pr.second);
+              }
+              std::cout << "Transform matrix:\n" << T_delta << std::endl;
+              // TODO: move ret to later
+              ret.second = true;
+              ret.first.setIdentity();
+              ret.first.rotate(std::atan2(T_delta(1, 0), T_delta(0, 0)));
+              ret.first.pretranslate(T_delta.block<2, 1>(0, 2));
             }
-            std::cout << "Transform matrix:\n" << T_delta << std::endl;
-
           }
       }
 
+      // TODO: cross level consensus
+
+      // TODO: full metric estimation
 
     }
 

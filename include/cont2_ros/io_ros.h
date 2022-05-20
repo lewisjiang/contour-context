@@ -38,7 +38,7 @@ protected:
   void commonLidarMsgCallback(const sensor_msgs::PointCloud2::ConstPtr &msg) {
     typename pcl::PointCloud<PointType>::Ptr ptr(new pcl::PointCloud<PointType>());
     pcl::fromROSMsg(*msg, *ptr);
-
+    ptr->header.stamp = msg->header.stamp.toNSec(); // pcl conversion uses us, here we overwrite it with ns
     printf("Data\n");
 
     mtx_lidar_.lock();
