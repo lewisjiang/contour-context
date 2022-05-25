@@ -183,31 +183,31 @@ public:
     bool ret = false;
     // 1. area, 2.3. eig, 4. com;
     if (diff_perc(cont_src.cell_cnt_, cont_tgt.cell_cnt_, 0.2)) {
-      printf("\tCell cnt not pass.\n");
+//      printf("\tCell cnt not pass.\n");
       return ret;
     }
 
     if (std::max(cont_src.cell_cnt_, cont_tgt.cell_cnt_) > 15 &&
         diff_delt(cont_src.vol3_mean_, cont_tgt.vol3_mean_, 0.3)) {
-      printf("\tAvg height not pass.\n");
+//      printf("\tAvg height not pass.\n");
       return ret;
     }
 
     if (std::max(cont_src.eig_vals_(1), cont_tgt.eig_vals_(1)) > 2.0 &&
         diff_perc(std::sqrt(cont_src.eig_vals_(1)), std::sqrt(cont_tgt.eig_vals_(1)), 0.2)) {
-      printf("\tBig eigval not pass.\n");
+//      printf("\tBig eigval not pass.\n");
       return ret;
     }
 
     if (std::max(cont_src.eig_vals_(0), cont_tgt.eig_vals_(0)) > 1.0 &&
         diff_perc(std::sqrt(cont_src.eig_vals_(0)), std::sqrt(cont_tgt.eig_vals_(0)), 0.2)) {
-      printf("\tSmall eigval not pass.\n");
+//      printf("\tSmall eigval not pass.\n");
       return ret;
     }
 
     if (std::max((cont_src.com_ - cont_src.pos_mean_).norm(), (cont_tgt.com_ - cont_tgt.pos_mean_).norm()) > 0.5 &&
         diff_perc((cont_src.com_ - cont_src.pos_mean_).norm(), (cont_tgt.com_ - cont_tgt.pos_mean_).norm(), 0.25)) {
-      printf("\tCom radius not pass.\n");
+//      printf("\tCom radius not pass.\n");
       return ret;
     }
 
@@ -239,6 +239,10 @@ public:
 //  void displayContour(const std::string &fpath) const {
 //
 //  }
+
+  inline M2D getManualCov() const {
+    return eig_vecs_ * eig_vals_.asDiagonal() * eig_vecs_.transpose();
+  }
 
 };
 

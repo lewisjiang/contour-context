@@ -3,6 +3,7 @@
 #include <ros/ros.h>
 #include "cont2/contour_mng.h"
 #include "cont2_ros/io_ros.h"
+#include "cont2/contour_db.h"
 
 #include <nav_msgs/Path.h>
 #include <visualization_msgs/MarkerArray.h>
@@ -14,6 +15,7 @@
 #include <tf2/convert.h>
 #include <tf2_eigen/tf2_eigen.h>
 
+const std::string PROJ_DIR = std::string(PJSRCDIR);
 
 class RosBagPlayLoopTest {
   // ros stuff
@@ -23,14 +25,15 @@ class RosBagPlayLoopTest {
   nav_msgs::Path path_msg;
   visualization_msgs::MarkerArray line_array;
 
-  std::vector<ContourManager> scans;
+  std::vector<std::shared_ptr<ContourManager>> scans;
+  ContourDB contour_db;
   std::vector<Eigen::Isometry3d> gt_poses;
 
   Cont2_ROS_IO<pcl::PointXYZ> ros_io;
 
   tf2_ros::Buffer tfBuffer;
   tf2_ros::TransformListener tfListener;
-  int lc_cnt{};
+  int lc_cnt{}, seq_cnt{};
 
   bool time_beg_set = false;
   ros::Time time_beg;
@@ -38,7 +41,8 @@ class RosBagPlayLoopTest {
 
 public:
   explicit RosBagPlayLoopTest(ros::NodeHandle &nh_) : nh(nh_), ros_io(0, "/velodyne_points", nh_),
-                                                      tfListener(tfBuffer) {
+                                                      tfListener(tfBuffer),
+                                                      contour_db(ContourDBConfig(), std::vector<int>({1, 2, 3, 4})) {
     path_msg.header.frame_id = "world";
     pub_path = nh_.advertise<nav_msgs::Path>("/gt_path", 10000);
     pub_lc_connections = nh_.advertise<visualization_msgs::MarkerArray>("/lc_connect", 10000);
@@ -75,7 +79,7 @@ public:
       publishPath(time, tf_gt_last);
 
     } catch (tf2::TransformException &ex) {
-      ROS_WARN("%s", ex.what());
+      ROS_WARN("%s. Returning...", ex.what());
       return;
     }
 
@@ -85,25 +89,57 @@ public:
 
     ContourManagerConfig config;
     config.lv_grads_ = {1.5, 2, 2.5, 3, 3.5, 4};
-    ContourManager cmng(config);
-    cmng.makeBEV<pcl::PointXYZ>(out_ptr);
-//      cmng.makeContours();
-    cmng.makeContoursRecurs();
-    scans.emplace_back(cmng);
-    if (scans.size() > 1) {
-      int i = cnt;
-//      for (int i = 0; i < scans.size(); i++) {
-      for (int j = 0; j < i - 100; j += 5) { // avoid nearby loop closure
-        printf("Matching new: %d with old: %d:", i, j);
-        TicToc clk_match_once;
-        auto lc_detect_res = ContourManager::calcScanCorresp(scans[i], scans[j]);  // (src, tgt)
-        printf("Match once time: %f\n", clk_match_once.toc());
-        if (lc_detect_res.second)
-          new_lc_pairs.emplace_back(i, j);
-      }
-//      }
-    }
+    std::shared_ptr<ContourManager> cmng_ptr(new ContourManager(config, cnt));
+    cmng_ptr->makeBEV<pcl::PointXYZ>(out_ptr);
+//      cmng_ptr.makeContours();
+    cmng_ptr->makeContoursRecurs();
 
+    // save images of layers
+//    for (int i = 0; i < config.lv_grads_.size(); i++) {
+//      std::string f_name = PROJ_DIR + "/results/layer_img/contour_" + "lv" + std::to_string(i) + "_" +
+//                           std::to_string(out_ptr->header.stamp) + ".png";
+//      cmng_ptr.saveContourImage(f_name, i);
+//    }
+
+//    // case 1: poll over all data
+//    scans.emplace_back(cmng_ptr);
+//    if (scans.size() > 1) {
+//      int i = cnt;
+//      for (int j = 0; j < i - 100; j += 5) { // avoid nearby loop closure
+//        printf("Matching new: %d with old: %d:", i, j);
+//        TicToc clk_match_once;
+//        auto lc_detect_res = ContourManager::calcScanCorresp(*scans[i], *scans[j]);  // (src, tgt)
+//        printf("Match once time: %f\n", clk_match_once.toc());
+//        if (lc_detect_res.second)
+//          new_lc_pairs.emplace_back(i, j);
+//      }
+//    }
+
+    // case 2: use tree
+    // 2.1 query
+    std::vector<std::shared_ptr<ContourManager>> candidate_loop;
+    std::vector<KeyFloatType> dists_sq;
+    contour_db.queryCandidates(*cmng_ptr, candidate_loop, dists_sq);
+    printf("%lu Candidates, ", candidate_loop.size());
+    if (!candidate_loop.empty())
+      printf(" dist sq from %7.4f to %7.4f\n", dists_sq.front(), dists_sq.back());
+    else
+      printf("\n");
+
+    for (int j = 0; j < candidate_loop.size(); j++) {
+      printf("Matching new: %d with old: %d:", cnt, candidate_loop[j]->getIntID());
+      TicToc clk_match_once;
+      auto lc_detect_res = ContourManager::calcScanCorresp(*cmng_ptr, *candidate_loop[j]);  // (src, tgt)
+      printf("Match once time: %f\n", clk_match_once.toc());
+      if (lc_detect_res.second)
+        new_lc_pairs.emplace_back(cnt, j);
+    }
+    // 2.2 add new
+    contour_db.addScan(cmng_ptr, time.toSec());
+    // 2.3 balance
+    contour_db.pushAndBalance(seq_cnt++, time.toSec());
+
+    // plot
     publishLCConnections(new_lc_pairs, time);
     cnt++;
 

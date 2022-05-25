@@ -45,6 +45,7 @@ find_package(Ceres REQUIRED)
 
 include_directories(
         include
+        thirdparty
         ${glog_INCLUDE_DIRS}
         ${catkin_INCLUDE_DIRS}
         ${EIGEN3_INCLUDE_DIR}
@@ -101,6 +102,15 @@ target_link_libraries(${PROJECT_NAME}_connect_test
         ${catkin_LIBRARIES}
         ${PCL_LIBRARIES}
         ${OpenCV_LIBS}
+        )
+
+### 1.2 test flann
+add_executable(${PROJECT_NAME}_nanokdt_test
+        src/test/nanoflann_test.cpp
+        )
+target_link_libraries(${PROJECT_NAME}_nanokdt_test
+        ${glog_LIBRARIES}
+        ${catkin_LIBRARIES}
         )
 
 #add_executable(${PROJECT_NAME}_ros_lidar_test

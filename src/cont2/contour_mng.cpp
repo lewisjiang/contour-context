@@ -7,7 +7,7 @@
 void ContourManager::saveContours(const std::string &fpath) const {
   // 0:level, 1:cell_cnt, 2:pos_mean, 4:pos_cov, 8:eig_vals, eig_vecs(10), 14:eccen, 15:vol3_mean, 16:com, 18,19:..
   // Note that recording data as strings has accuracy loss
-//    std::string fpath = sav_dir + "/contours_" + str_id + ".txt";
+//    std::string fpath = sav_dir + "/contours_" + str_id_ + ".txt";
   std::fstream res_file(fpath, std::ios::out);
 
   if (res_file.rdstate() != std::ifstream::goodbit) {
@@ -58,7 +58,7 @@ void ContourManager::makeContours() {
       // 1. select points higher than a threshold
       mask.convertTo(mask_u8, CV_8U);
 
-      cv::imwrite("cart_context-mask-" + std::to_string(lev) + "-" + str_id + ".png", mask_u8);
+      cv::imwrite("cart_context-mask-" + std::to_string(lev) + "-" + str_id_ + ".png", mask_u8);
 
       // 2. calculate connected blobs
       cv::Mat1i labels, stats;  // int (CV_32S)
@@ -68,8 +68,8 @@ void ContourManager::makeContours() {
       // // aux: show image contour group
       cv::Mat label_img;
       cv::normalize(labels, label_img, 0, 255, cv::NORM_MINMAX);
-      cv::imwrite("cart_context-labels-" + std::to_string(lev) + "-" + str_id + ".png", label_img);
-      cv::imwrite("cart_context-mask-" + std::to_string(lev) + "-" + str_id + ".png", mask_u8);
+      cv::imwrite("cart_context-labels-" + std::to_string(lev) + "-" + str_id_ + ".png", label_img);
+      cv::imwrite("cart_context-mask-" + std::to_string(lev) + "-" + str_id_ + ".png", mask_u8);
 
       // 3. create contours for each connected component
       // https://stackoverflow.com/questions/37745274/opencv-find-perimeter-of-a-connected-component/48618464#48618464
@@ -107,4 +107,12 @@ void ContourManager::makeContours() {
     lev++;
 //      h_min = cap;
   }
+}
+
+void ContourManager::saveContourImage(const std::string &fpath, int level) const {
+  cv::Mat mask;
+  cv::threshold(bev_, mask, cfg_.lv_grads_[level], 123, cv::THRESH_TOZERO); // mask is same type and dimension as bev_
+  cv::Mat normalized_layer, mask_u8;
+  cv::normalize(mask, normalized_layer, 0, 255, cv::NORM_MINMAX);
+  cv::imwrite(fpath, normalized_layer);
 }

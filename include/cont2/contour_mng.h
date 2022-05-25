@@ -21,9 +21,8 @@
 
 #include "tools/bm_util.h"
 
-struct RetrievalKey {
-
-};
+using KeyFloatType = float; // retrieval key's float number type
+using RetrievalKey = Eigen::Matrix<KeyFloatType, 5, 1>;
 
 struct ContourManagerConfig {
   std::vector<float> lv_grads_;  // n marks, n+1 levels
@@ -45,11 +44,14 @@ class ContourManager {
 
   // property
   float x_max_, x_min_, y_max_, y_min_;
-  std::string str_id;
+  std::string str_id_;
+  int int_id_;
 
   // data
   std::vector<std::vector<std::shared_ptr<ContourView>>> cont_views_;  // TODO: use a parallel vec of vec for points?
   std::vector<int> layer_cell_cnt_;  // total number of cells in each layer/level
+  std::vector<RetrievalKey> layer_keys_;  // the key of each layer
+
   cv::Mat1f bev_;
   std::vector<std::vector<V2F>> c_height_position_;  // downsampled but not discretized point xy position, another bev
   float max_bin_val_ = -VAL_ABS_INF_, min_bin_val_ = VAL_ABS_INF_;
@@ -160,7 +162,7 @@ protected:
   }
 
 public:
-  explicit ContourManager(const ContourManagerConfig &config) : cfg_(config) {
+  explicit ContourManager(const ContourManagerConfig &config, int int_id) : cfg_(config), int_id_(int_id) {
     CHECK(cfg_.n_col_ % 2 == 0);
     CHECK(cfg_.n_row_ % 2 == 0);
     DCHECK(!cfg_.lv_grads_.empty());
@@ -175,6 +177,7 @@ public:
     c_height_position_ = std::vector<std::vector<V2F>>(cfg_.n_row_, std::vector<V2F>(cfg_.n_col_, V2F::Zero()));
     cont_views_.resize(cfg_.lv_grads_.size());
     layer_cell_cnt_.resize(cfg_.lv_grads_.size());
+    layer_keys_.resize(cfg_.lv_grads_.size());
 
   }
 
@@ -200,12 +203,12 @@ public:
       }
     }
     printf("Max/Min bin height: %f %f\n", max_bin_val_, min_bin_val_);
-    str_id = std::to_string(ptr_gapc->header.stamp);
+    str_id_ = std::to_string(ptr_gapc->header.stamp);
 
     cv::Mat mask, view;
     inRange(bev_, cv::Scalar::all(0), cv::Scalar::all(max_bin_val_), mask);
     normalize(bev_, view, 0, 255, cv::NORM_MINMAX, -1, mask);
-    cv::imwrite("cart_context-" + str_id + ".png", view);
+    cv::imwrite("cart_context-" + str_id_ + ".png", view);
   }
 
   void makeContoursRecurs() {
@@ -227,6 +230,35 @@ public:
       }
     }
 
+    // make retrieval keys
+    for (int ll = 0; ll < cfg_.lv_grads_.size(); ll++) {
+      RetrievalKey key;
+      key.setZero();
+      if (cont_views_[ll].size() > 2 && cont_views_[ll][0]->cell_cnt_ > cfg_.cont_cnt_thres_ &&
+          cont_views_[ll][1]->cell_cnt_ > cfg_.cont_cnt_thres_) { // TODO: make multiple keys for each level
+
+        key(0) = std::sqrt(cont_views_[ll][0]->cell_cnt_);
+        key(1) = std::sqrt(cont_views_[ll][1]->cell_cnt_);
+        V2D cc_line = cont_views_[ll][0]->pos_mean_ - cont_views_[ll][1]->pos_mean_;
+        key(2) = cc_line.norm();
+
+        // distribution of projection perp to cc line
+        cc_line.normalize();
+        V2D cc_perp(-cc_line.y(), cc_line.x());
+        M2D new_cov = (cont_views_[ll][0]->getManualCov() * (cont_views_[ll][0]->cell_cnt_ - 1) +
+                       cont_views_[ll][1]->getManualCov() * (cont_views_[ll][1]->cell_cnt_ - 1)) /
+                      (cont_views_[ll][0]->cell_cnt_ + cont_views_[ll][1]->cell_cnt_ - 1);
+        key(3) = std::sqrt(cc_perp.transpose() * new_cov * cc_perp);
+
+        // distribution of projection to cc line
+        key(4) = std::sqrt(cc_line.transpose() * new_cov * cc_line);
+
+      }
+
+
+      layer_keys_[ll] = key;
+    }
+
     // print top 2 features in each
 //    for (int i = 0; i < cfg_.lv_grads_.size(); i++) {
 //      printf("\nLevel %d top 2 statistics:\n", i);
@@ -240,10 +272,10 @@ public:
 //    }
 
     // save statistics of this scan:
-    std::string fpath = std::string(PJSRCDIR) + "/results/contours_orig_" + str_id + ".txt";
+    std::string fpath = std::string(PJSRCDIR) + "/results/contours_orig_" + str_id_ + ".txt";
     saveContours(fpath);
 
-//    cv::imwrite("cart_context-mask-" + std::to_string(3) + "-" + str_id + "rec.png", visualization);
+//    cv::imwrite("cart_context-mask-" + std::to_string(3) + "-" + str_id_ + "rec.png", visualization);
 //    for (const auto &x: cont_views_) {
 //      printf("level size: %lu\n", x.size());
 //    }
@@ -252,13 +284,25 @@ public:
   void makeContours();
 
   // util functions
+  // 1. save all contours' statistical data into a text file
   void saveContours(const std::string &fpath) const;
 
-  // TODO: get retrieval key of a scan
-  std::vector<float> getRetrievalKey(int level) const {
-    DCHECK_GT(level, 0);
-    DCHECK_GT(cont_views_.size(), level);
+  // 2. save a layer of contours to image
+  void saveContourImage(const std::string &fpath, int level) const;
 
+  // TODO: get retrieval key of a scan
+  RetrievalKey getRetrievalKey(int level) const {
+    DCHECK_GE(level, 0);
+    DCHECK_GT(cont_views_.size(), level);
+    return layer_keys_[level];
+  }
+
+  inline std::string getStrID() const {
+    return str_id_;
+  }
+
+  inline int getIntID() const {
+    return int_id_;
   }
 
   // TODO: check if contours in two scans can be accepted as from the same heatmap, and return the transform
@@ -281,7 +325,10 @@ public:
                                                    {2, 3}};  // in accordance with num_src_top
 
     std::pair<Eigen::Isometry2d, bool> ret{};
-    int num_levels = src.cont_views_.size()-2;
+    int num_levels = (int) src.cont_views_.size() - 2;
+
+    // TODO: check FP rate for retrieval tasks
+
     for (int l = 0; l < num_levels; l++) {
       if (src.cont_views_[l].size() < num_src_top || tgt.cont_views_[l].size() < 3)
         continue;
