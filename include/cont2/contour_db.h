@@ -27,8 +27,8 @@ struct RetrievalMetric {
 };
 
 struct TreeBucketConfig {
-  double max_elapse_ = 20.0;  // the max spatial/temporal delay before adding to the trees
-  double min_elapse_ = 10.0;  // the min spatial/temporal delay to wait before adding to the trees
+  double max_elapse_ = 10.0;  // the max spatial/temporal delay before adding to the trees
+  double min_elapse_ = 5.0;  // the min spatial/temporal delay to wait before adding to the trees
 };
 
 struct TreeBucket {
@@ -63,7 +63,7 @@ struct TreeBucket {
 
   inline bool needPopBuffer(double curr_ts) const {
     double ts_overflow = curr_ts - cfg_.max_elapse_;
-    if (!buffer_.empty() && buffer_[0].ts > ts_overflow)  // rebuild every (max-min) sec, ignore newest min.
+    if (buffer_.empty() || buffer_[0].ts > ts_overflow)  // rebuild every (max-min) sec, ignore newest min.
       return false;
     return true;
   }
@@ -104,6 +104,9 @@ struct TreeBucket {
     ret_idx.resize(num_res);
     out_dist_sq.resize(num_res);
     std::fill(out_dist_sq.begin(), out_dist_sq.end(), MAX_DIST_SQ);   // in case of fewer points in the tree than k
+
+    if (!tree_ptr) { return; }
+
     nanoflann::KNNResultSet<KeyFloatType> resultSet(num_res);
     resultSet.init(&ret_idx[0], &out_dist_sq[0]);
 
@@ -118,7 +121,7 @@ struct TreeBucket {
 
 
 struct LayerDB {
-  const int min_elem_split_ = 200;
+  const int min_elem_split_ = 100;
   const double imba_diff_ratio_ = 0.2; // if abs(size(i)-size(i+1))>ratio * max(,), we need to balance the two trees.
   const int max_num_backets_ = 6;
   const int bucket_chann_ = 0; // the #th dimension of the retrieval key that is used as buckets.
@@ -152,8 +155,12 @@ struct LayerDB {
 
   // TODO: rebalance and add buffer to the tree
   // Assumption: rebuild in turn instead of rebuild all at once. tr1 and tr2 are adjacent, tr1 has a lower bucket range.
-  void rebuild(int seed, double curr_ts) {
-    int idx_t1 = std::abs(seed) % max_num_backets_;
+//  void rebuild(int seed, double curr_ts) {
+  void rebuild(int idx_t1, double curr_ts) {
+//    int idx_t1 = std::abs(seed) % (2 * (max_num_backets_ - 2));
+//    if (idx_t1 > (max_num_backets_ - 2))
+//      idx_t1 = 2 * (max_num_backets_ - 2) - idx_t1;
+
     DCHECK_LT(idx_t1, buckets_.size() - 1);
     TreeBucket &tr1 = buckets_[idx_t1], &tr2 = buckets_[idx_t1 + 1];
 
@@ -178,11 +185,19 @@ struct LayerDB {
     // q: How to find the elements to move in O(n)
     //  a1: flatten and rebuild?
     //  a2: sort the larger one, and copy parts to the smaller one.
+
+    if (diff_ratio < 0.5 * imba_diff_ratio_) {
+      if (pb1) tr1.popBufferMax(curr_ts);
+      if (pb2) tr2.popBufferMax(curr_ts);
+      return;
+    }
+
+    printf(" (m->)"); // merging here
     if (sz1 > sz2) {
-      DCHECK_GE(sz1, min_elem_split_);
+//      DCHECK_GE(sz1, min_elem_split_);
       int to_move_max = int((sz1 - sz2 + imba_diff_ratio_ * sz2) / (2 - imba_diff_ratio_));
       int to_move_mid = int((sz1 - sz2) / 2.0);
-      int to_move_min = int((sz1 - sz2 - imba_diff_ratio_ * sz2) / (2 - imba_diff_ratio_));
+      int to_move_min = std::max(0, int((sz1 - sz2 - imba_diff_ratio_ * sz1) / (2 - imba_diff_ratio_)));
       DCHECK_GE(to_move_max, to_move_mid);
       DCHECK_GE(to_move_mid, to_move_min);
 
@@ -221,6 +236,9 @@ struct LayerDB {
       }
 
       if (num_to_move == 0) { // should rebalance but cannot, due to a strip of contagious bucket values
+        printf("Cannot split due to contagious values A");
+        tr1.popBufferMax(curr_ts);
+        if (pb2) tr2.popBufferMax(curr_ts);
         return;
       }
 
@@ -264,10 +282,10 @@ struct LayerDB {
 
 
     } else { // if tree 1 is shorter and move elements from tree 2 to tree 1:
-      DCHECK_GE(sz2, min_elem_split_);
+//      DCHECK_GE(sz2, min_elem_split_);
       int to_move_max = int((sz2 - sz1 + imba_diff_ratio_ * sz1) / (2 - imba_diff_ratio_));
       int to_move_mid = int((sz2 - sz1) / 2.0);
-      int to_move_min = int((sz2 - sz1 - imba_diff_ratio_ * sz1) / (2 - imba_diff_ratio_));
+      int to_move_min = std::max(0, int((sz2 - sz1 - imba_diff_ratio_ * sz2) / (2 - imba_diff_ratio_)));
       DCHECK_GE(to_move_max, to_move_mid);
       DCHECK_GE(to_move_mid, to_move_min);
 
@@ -282,7 +300,7 @@ struct LayerDB {
       if (tr2.data_tree_[sort_permu[sz2 - to_move_mid]](bucket_chann_) !=
           tr2.data_tree_[sort_permu[sz2 - to_move_mid - 1]](bucket_chann_)) { // if no contagious value across split
         num_to_move = to_move_mid;
-        split_val = tr2.data_tree_[sort_permu[sz2 - to_move_mid]](bucket_chann_);
+        split_val = tr2.data_tree_[sort_permu[sz2 - to_move_mid - 1]](bucket_chann_);
       } else {
         KeyFloatType contagious_val = tr2.data_tree_[sort_permu[sz2 - to_move_mid]](bucket_chann_);
         int i = to_move_mid - 1;
@@ -306,6 +324,9 @@ struct LayerDB {
       }
 
       if (num_to_move == 0) { // should rebalance but cannot, due to a strip of contagious bucket values
+        printf("Cannot split due to contagious values B");
+        if (pb1) tr1.popBufferMax(curr_ts);
+        tr2.popBufferMax(curr_ts);
         return;
       }
 
@@ -382,15 +403,15 @@ struct LayerDB {
       return a.ts < b.ts;
     });
 
-    tr1.rebuildTree();
-    tr2.rebuildTree();
+    tr1.popBufferMax(curr_ts);
+    tr2.popBufferMax(curr_ts);
 
   }
 
   // TODO: query
   void
-  knnSearch(const RetrievalKey &q_key, const int k_top, const KeyFloatType max_dist_sq,
-            std::vector<std::pair<size_t, KeyFloatType>> &res_pairs) const {
+  layerKNNSearch(const RetrievalKey &q_key, const int k_top, const KeyFloatType max_dist_sq,
+                 std::vector<std::pair<size_t, KeyFloatType>> &res_pairs) const {
     // the result vector can have fewer than k result pairs.
 
     int mid_bucket = 0;
@@ -494,8 +515,8 @@ public:
     std::vector<std::pair<size_t, KeyFloatType>> q_container;
     for (int ll = 0; ll < q_levels_.size(); ll++) {
       std::vector<std::pair<size_t, KeyFloatType>> tmp_res;
-      layer_db_[ll].knnSearch(q_cont.getRetrievalKey(q_levels_[ll]), cfg_.max_candi_per_layer_, cfg_.max_dist_sq_,
-                              tmp_res);
+      layer_db_[ll].layerKNNSearch(q_cont.getRetrievalKey(q_levels_[ll]), cfg_.max_candi_per_layer_, cfg_.max_dist_sq_,
+                                   tmp_res);
       q_container.insert(q_container.end(), tmp_res.begin(), tmp_res.end());  // Q:different thres for different levels?
     }
 
@@ -507,13 +528,16 @@ public:
       q_container.resize(cfg_.max_total_candi_);
 
     std::set<size_t> used_gidx;
+    printf("Query dists_sq: ");
     for (const auto &res: q_container) {
-      if (used_gidx.find(res.first) != used_gidx.end()) {
+      if (used_gidx.find(res.first) == used_gidx.end()) {
         used_gidx.insert(res.first);
         cand_ptrs.emplace_back(all_bevs_[res.first]);
         dist_sq.emplace_back(res.second);
+        printf("%7.4f", res.second);
       }
     }
+    printf("\n");
 
 
     // find which bucket ranges does the query fall in
@@ -532,8 +556,20 @@ public:
 
   // TODO: 3. push data popped from buffer, and maintain balance (at most 2 buckets at a time)
   void pushAndBalance(int seed, double curr_timestamp) {
+    int idx_t1 = std::abs(seed) % (2 * (layer_db_[0].max_num_backets_ - 2));
+    if (idx_t1 > (layer_db_[0].max_num_backets_ - 2))
+      idx_t1 = 2 * (layer_db_[0].max_num_backets_ - 2) - idx_t1;
+
+    printf("Balancing bucket %d and %d\n", idx_t1, idx_t1 + 1);
+
+    printf("Tree size of each bucket: \n");
     for (int ll = 0; ll < q_levels_.size(); ll++) {
-      layer_db_[ll].rebuild(seed, curr_timestamp);
+      printf("q_levels_[%d]: ", ll);
+      layer_db_[ll].rebuild(idx_t1, curr_timestamp);
+      for (int i = 0; i < layer_db_[ll].max_num_backets_; i++) {
+        printf("%5lu", layer_db_[ll].buckets_[i].getTreeSize());
+      }
+      printf("\n");
     }
   }
 

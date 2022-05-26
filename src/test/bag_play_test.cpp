@@ -51,12 +51,14 @@ public:
   void processOnce(int &cnt) {
 
     pcl::PointCloud<pcl::PointXYZ>::ConstPtr out_ptr = nullptr;
-    out_ptr = ros_io.getLidarPointCloud();
+    geometry_msgs::TransformStamped tf_gt_last;
+//    out_ptr = ros_io.getLidarPointCloud();
+    out_ptr = ros_io.getLidarPointCloud(tf_gt_last);
     if (!out_ptr)
       return;
 
-    std::cout << out_ptr->size() << std::endl;
-    std::cout << out_ptr->header.seq << std::endl;
+//    std::cout << out_ptr->size() << std::endl;
+//    std::cout << out_ptr->header.seq << std::endl;
 
     ros::Time time;
     time.fromNSec(out_ptr->header.stamp);
@@ -65,25 +67,40 @@ public:
       time_beg_set = true;
     }
 
-    try {
-      auto tf_gt_last = tfBuffer.lookupTransform("world", "velodyne", time, ros::Duration(0.2));
-      auto T_gt_last = tf2::transformToEigen(tf_gt_last);
+    auto T_gt_last = tf2::transformToEigen(tf_gt_last);
 
-      Eigen::Vector3d time_translate(0, 0, 1);
-      time_translate = time_translate * (time.toSec() - time_beg.toSec()) / 60;   // elevate 1m per minute
+    Eigen::Vector3d time_translate(0, 0, 1);
+    time_translate = time_translate * (time.toSec() - time_beg.toSec()) / 60;   // elevate 1m per minute
 
-      T_gt_last.pretranslate(time_translate);
-      gt_poses.emplace_back(T_gt_last);
+    T_gt_last.pretranslate(time_translate);
+    gt_poses.emplace_back(T_gt_last);
 
-      tf_gt_last.transform.translation.z += time_translate.z();// elevate 1m per minute
-      publishPath(time, tf_gt_last);
+    tf_gt_last.transform.translation.z += time_translate.z();// elevate 1m per minute
+    publishPath(time, tf_gt_last);
 
-    } catch (tf2::TransformException &ex) {
-      ROS_WARN("%s. Returning...", ex.what());
-      return;
-    }
+//    try {
+//      auto tf_gt_last = tfBuffer.lookupTransform("world", "velodyne", time, ros::Duration(0.2));
+//      auto T_gt_last = tf2::transformToEigen(tf_gt_last);
+//
+//      Eigen::Vector3d time_translate(0, 0, 1);
+//      time_translate = time_translate * (time.toSec() - time_beg.toSec()) / 60;   // elevate 1m per minute
+//
+//      T_gt_last.pretranslate(time_translate);
+//      gt_poses.emplace_back(T_gt_last);
+//
+//      tf_gt_last.transform.translation.z += time_translate.z();// elevate 1m per minute
+//      publishPath(time, tf_gt_last);
+//
+//    } catch (tf2::TransformException &ex) {
+//      ROS_WARN("%s. Returning...", ex.what());
+//      return;
+//    }
 
     printf("our curr seq: %d, stamp: %lu\n", cnt, time.toNSec());
+
+    if (cnt == 1042) {
+      printf("Stop here\n");
+    }
 
     std::vector<std::pair<int, int>> new_lc_pairs;
 
@@ -110,8 +127,17 @@ public:
 //        TicToc clk_match_once;
 //        auto lc_detect_res = ContourManager::calcScanCorresp(*scans[i], *scans[j]);  // (src, tgt)
 //        printf("Match once time: %f\n", clk_match_once.toc());
-//        if (lc_detect_res.second)
+//
+//        if (lc_detect_res.second) {
 //          new_lc_pairs.emplace_back(i, j);
+//
+//          printf("Key squared diffs at different levels: ");
+//          for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
+//            RetrievalKey diff = scans[i]->getRetrievalKey(ll) - scans[j]->getRetrievalKey(ll);
+//            printf("%7.2f ", diff.squaredNorm());
+//          }
+//          printf("\n");
+//        }
 //      }
 //    }
 
@@ -132,7 +158,7 @@ public:
       auto lc_detect_res = ContourManager::calcScanCorresp(*cmng_ptr, *candidate_loop[j]);  // (src, tgt)
       printf("Match once time: %f\n", clk_match_once.toc());
       if (lc_detect_res.second)
-        new_lc_pairs.emplace_back(cnt, j);
+        new_lc_pairs.emplace_back(cnt, candidate_loop[j]->getIntID());
     }
     // 2.2 add new
     contour_db.addScan(cmng_ptr, time.toSec());

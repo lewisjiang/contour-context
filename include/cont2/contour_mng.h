@@ -22,7 +22,59 @@
 #include "tools/bm_util.h"
 
 using KeyFloatType = float; // retrieval key's float number type
-using RetrievalKey = Eigen::Matrix<KeyFloatType, 5, 1>;
+//using RetrievalKey = Eigen::Matrix<KeyFloatType, 5, 1>;
+
+template<size_t sz>
+struct ArrayAsKey {
+  enum {
+    SizeAtCompileTime = sz
+  };
+//  static constexpr size_t SizeAtCompileTime = sz;  // undefined reference when linking
+  KeyFloatType vals[sz]{};
+
+  KeyFloatType *data() {
+    return vals;
+  }
+
+  KeyFloatType &operator()(size_t i) { return vals[i]; }
+
+  const KeyFloatType &operator()(size_t i) const { return vals[i]; }
+
+  KeyFloatType &operator[](size_t i) { return vals[i]; }
+
+  const KeyFloatType &operator[](size_t i) const { return vals[i]; }
+
+  ArrayAsKey<sz> operator-(ArrayAsKey<sz> const &obj) {
+    ArrayAsKey<sz> res;
+    for (int i = 0; i < sz; i++)
+      res.vals[i] = vals[i] - obj.vals[i];
+    return res;
+  }
+
+  void setZero() {
+    std::fill(vals, vals + SizeAtCompileTime, KeyFloatType(0));
+  }
+
+  size_t size() const {
+    return sz;
+  }
+
+  KeyFloatType sum() const {
+    KeyFloatType ret(0);
+    for (const auto &dat: vals)
+      ret += dat;
+    return ret;
+  }
+
+  KeyFloatType squaredNorm() const {
+    KeyFloatType ret(0);
+    for (const auto &dat: vals)
+      ret += dat * dat;
+    return ret;
+  }
+};
+
+using RetrievalKey = ArrayAsKey<5>;
 
 struct ContourManagerConfig {
   std::vector<float> lv_grads_;  // n marks, n+1 levels
@@ -245,9 +297,14 @@ public:
         // distribution of projection perp to cc line
         cc_line.normalize();
         V2D cc_perp(-cc_line.y(), cc_line.x());
+
+        // case1: use cocentic distribution
         M2D new_cov = (cont_views_[ll][0]->getManualCov() * (cont_views_[ll][0]->cell_cnt_ - 1) +
                        cont_views_[ll][1]->getManualCov() * (cont_views_[ll][1]->cell_cnt_ - 1)) /
                       (cont_views_[ll][0]->cell_cnt_ + cont_views_[ll][1]->cell_cnt_ - 1);
+        // case2: use relative translation preserving distribution
+//        M2D new_cov = ContourView::addContourStat(*cont_views_[ll][0], *cont_views_[ll][1]).getManualCov();
+
         key(3) = std::sqrt(cc_perp.transpose() * new_cov * cc_perp);
 
         // distribution of projection to cc line

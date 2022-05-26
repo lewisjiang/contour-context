@@ -18,6 +18,13 @@
 
 #include <glog/logging.h>
 
+#include <geometry_msgs/PoseStamped.h>
+#include "tf2/transform_datatypes.h"
+#include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/transform_listener.h>
+#include <tf2/convert.h>
+#include <tf2_eigen/tf2_eigen.h>
+
 /*
  * a collection of adaptors to deal with ROS bag, topics, eyc., for the ros independent package.
  */
@@ -31,7 +38,11 @@ class Cont2_ROS_IO {
   ros::Subscriber sub_lidar_common_;
 
   std::vector<typename pcl::PointCloud<PointType>::Ptr> lidar_buffer_;
+  std::vector<geometry_msgs::TransformStamped> gt_pose_buffer_;
   std::mutex mtx_lidar_;
+
+  tf2_ros::Buffer tfBuffer;
+  tf2_ros::TransformListener tfListener;
 
 
 protected:
@@ -39,15 +50,27 @@ protected:
     typename pcl::PointCloud<PointType>::Ptr ptr(new pcl::PointCloud<PointType>());
     pcl::fromROSMsg(*msg, *ptr);
     ptr->header.stamp = msg->header.stamp.toNSec(); // pcl conversion uses us, here we overwrite it with ns
-    printf("Data\n");
+    printf("---\nData received in callback, stamp: %lu\n", msg->header.stamp.toNSec());
 
     mtx_lidar_.lock();
     lidar_buffer_.emplace_back(ptr);
+    ros::Time time;
+    time.fromNSec(ptr->header.stamp);
+
+    try {
+      auto tf_gt_last = tfBuffer.lookupTransform("world", "velodyne", time, ros::Duration(0.1));
+      gt_pose_buffer_.template emplace_back(tf_gt_last);
+    } catch (tf2::TransformException &ex) {
+      lidar_buffer_.pop_back();
+      ROS_WARN("%s. Pop last lidar, returning...", ex.what());
+//      return;
+    }
+
     mtx_lidar_.unlock();
   }
 
 public:
-  Cont2_ROS_IO(int mode, const std::string &sparam, ros::NodeHandle &nh) : mode_(mode) {
+  Cont2_ROS_IO(int mode, const std::string &sparam, ros::NodeHandle &nh) : mode_(mode), tfListener(tfBuffer) {
     if (mode == 0) {
       lidar_topic_ = sparam;
       sub_lidar_common_ = nh.subscribe(lidar_topic_, 2000, &Cont2_ROS_IO::commonLidarMsgCallback, this);
@@ -66,6 +89,26 @@ public:
     } else {
       out_ptr = lidar_buffer_.front();
       lidar_buffer_.erase(lidar_buffer_.begin());
+
+//      std::cout << out_ptr->header.stamp << std::endl;  // header ts in usec
+//      printf("Buffer size: %lu\n", lidar_buffer_.size());
+    }
+    mtx_lidar_.unlock();
+    return out_ptr;
+  }
+
+  typename pcl::PointCloud<PointType>::ConstPtr getLidarPointCloud(geometry_msgs::TransformStamped &gt_pose) {
+    mtx_lidar_.lock();
+    typename pcl::PointCloud<PointType>::Ptr out_ptr;
+    if (lidar_buffer_.empty()) {
+      out_ptr = nullptr;
+
+    } else {
+      out_ptr = lidar_buffer_.front();
+      lidar_buffer_.erase(lidar_buffer_.begin());
+
+      gt_pose = gt_pose_buffer_.front();
+      gt_pose_buffer_.erase(gt_pose_buffer_.begin());
 
 //      std::cout << out_ptr->header.stamp << std::endl;  // header ts in usec
 //      printf("Buffer size: %lu\n", lidar_buffer_.size());

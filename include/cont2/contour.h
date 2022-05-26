@@ -119,9 +119,9 @@ public:
     cell_vol3_torq_ += height * v_rc;
   }
 
-  // TODO: 1. build children_ from a current contour
+  // TOxDO: 1. build children_ from a current contour
 
-  // TODO: 2. calculate statistics from running data (including feature hypothesis)
+  // TO-DO: 2. calculate statistics from running data (including feature hypothesis)
   void calcStatVals() {
     pos_mean_ = cell_pos_sum_ / cell_cnt_;
 
@@ -215,9 +215,17 @@ public:
     return ret;
   }
 
-  // TODO: 4. add two contours
-  static ContourView addContours(const ContourView &cont1, const ContourView &cont2) {
+  // TODO: 4. add two contours. Only statistical parts are useful
+  static ContourView addContourStat(const ContourView &cont1, const ContourView &cont2) {
     CHECK_EQ(cont1.level_, cont2.level_);
+    ContourView res(cont1.level_, cont1.h_min_, cont1.h_max_, cont1.aabb_, nullptr);
+    res.cell_cnt_ = cont1.cell_cnt_ + cont2.cell_cnt_;
+    res.cell_pos_sum_ = cont1.cell_pos_sum_ + cont2.cell_pos_sum_;
+    res.cell_pos_tss_ = cont1.cell_pos_tss_ + cont2.cell_pos_tss_;
+    res.cell_vol3_ = cont1.cell_vol3_ + cont2.cell_vol3_;
+    res.cell_vol3_torq_ = cont1.cell_vol3_torq_ + cont2.cell_vol3_torq_;
+    res.calcStatVals();
+    return res;
   }
 
   // getter setter
