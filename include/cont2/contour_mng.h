@@ -74,7 +74,7 @@ struct ArrayAsKey {
   }
 };
 
-using RetrievalKey = ArrayAsKey<5>;
+using RetrievalKey = ArrayAsKey<6>;
 
 struct ContourManagerConfig {
   std::vector<float> lv_grads_;  // n marks, n+1 levels
@@ -298,17 +298,20 @@ public:
         cc_line.normalize();
         V2D cc_perp(-cc_line.y(), cc_line.x());
 
-        // case1: use cocentic distribution
-        M2D new_cov = (cont_views_[ll][0]->getManualCov() * (cont_views_[ll][0]->cell_cnt_ - 1) +
-                       cont_views_[ll][1]->getManualCov() * (cont_views_[ll][1]->cell_cnt_ - 1)) /
-                      (cont_views_[ll][0]->cell_cnt_ + cont_views_[ll][1]->cell_cnt_ - 1);
+//        // case1: use cocentic distribution
+//        M2D new_cov = (cont_views_[ll][0]->getManualCov() * (cont_views_[ll][0]->cell_cnt_ - 1) +
+//                       cont_views_[ll][1]->getManualCov() * (cont_views_[ll][1]->cell_cnt_ - 1)) /
+//                      (cont_views_[ll][0]->cell_cnt_ + cont_views_[ll][1]->cell_cnt_ - 1);
         // case2: use relative translation preserving distribution
-//        M2D new_cov = ContourView::addContourStat(*cont_views_[ll][0], *cont_views_[ll][1]).getManualCov();
+        M2D new_cov = ContourView::addContourStat(*cont_views_[ll][0], *cont_views_[ll][1]).getManualCov();
 
         key(3) = std::sqrt(cc_perp.transpose() * new_cov * cc_perp);
 
         // distribution of projection to cc line
         key(4) = std::sqrt(cc_line.transpose() * new_cov * cc_line);
+
+        // the max eigen value of the first ellipse
+        key(5) = std::sqrt(cont_views_[ll][0]->eig_vals_(1));
 
       }
 
@@ -346,6 +349,18 @@ public:
 
   // 2. save a layer of contours to image
   void saveContourImage(const std::string &fpath, int level) const;
+
+  cv::Mat getContourImage(int level) const {
+    cv::Mat mask;
+    cv::threshold(bev_, mask, cfg_.lv_grads_[level], 123, cv::THRESH_TOZERO); // mask is same type and dimension as bev_
+    cv::Mat normalized_layer, mask_u8;
+    cv::normalize(mask, normalized_layer, 0, 255, cv::NORM_MINMAX, CV_8U);  // dtype=-1 (default): same type as input
+    return normalized_layer;
+  }
+
+  inline ContourManagerConfig getConfig() const {
+    return cfg_;
+  }
 
   // TODO: get retrieval key of a scan
   RetrievalKey getRetrievalKey(int level) const {

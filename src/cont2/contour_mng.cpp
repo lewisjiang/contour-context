@@ -110,9 +110,5 @@ void ContourManager::makeContours() {
 }
 
 void ContourManager::saveContourImage(const std::string &fpath, int level) const {
-  cv::Mat mask;
-  cv::threshold(bev_, mask, cfg_.lv_grads_[level], 123, cv::THRESH_TOZERO); // mask is same type and dimension as bev_
-  cv::Mat normalized_layer, mask_u8;
-  cv::normalize(mask, normalized_layer, 0, 255, cv::NORM_MINMAX);
-  cv::imwrite(fpath, normalized_layer);
+  cv::imwrite(fpath, getContourImage(level));
 }

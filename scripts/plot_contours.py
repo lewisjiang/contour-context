@@ -139,21 +139,28 @@ def plot_contours(raw_data=None, levels=None, legends=()):
 
 
 if __name__ == "__main__":
-    f1 = "../results/contours_orig_1317357625557814.txt"   # -s 0
-    f2 = "../results/contours_orig_1317357625661737.txt"
+    # f1 = "../results/contours_orig_1317357625557814.txt"   # -s 0
+    # f2 = "../results/contours_orig_1317357625661737.txt"
+    #
+    # f91 = "../results/contours_orig_1317357736560660.txt"
+    # f92 = "../results/contours_orig_1317357736664336.txt"  # -s 111.1
+    #
+    # # data_names = ("t=0", "t=1", "t=91", "t=92")
+    # data_names = ("t=0", "t=92")
+    # # data_names = ("t=0", "t=1")
+    #
+    # dat1 = read_data_from_file(f1)
+    # # dat2 = read_data_from_file(f2)
+    # # dat3 = read_data_from_file(f91)
+    # dat4 = read_data_from_file(f92)
+    #
+    # # plot_contours([dat1, dat2, dat3, dat4], [2, 3, 4], data_names)
+    # plot_contours([dat1, dat4], [0, 1, 2, 3, 4, 5], data_names)
+    # # plot_contours([dat1, dat2], [1, 2, 3, 4], data_names)
 
-    f91 = "../results/contours_orig_1317357736560660.txt"
-    f92 = "../results/contours_orig_1317357736664336.txt"  # -s 111.1
-
-    # data_names = ("t=0", "t=1", "t=91", "t=92")
-    data_names = ("t=0", "t=92")
-    # data_names = ("t=0", "t=1")
-
-    dat1 = read_data_from_file(f1)
-    # dat2 = read_data_from_file(f2)
-    # dat3 = read_data_from_file(f91)
-    dat4 = read_data_from_file(f92)
-
-    # plot_contours([dat1, dat2, dat3, dat4], [2, 3, 4], data_names)
-    plot_contours([dat1, dat4], [0, 1, 2, 3, 4, 5], data_names)
-    # plot_contours([dat1, dat2], [1, 2, 3, 4], data_names)
+    f_new = "../results/contours_orig_1317357723149910000.txt"
+    f_old = "../results/contours_orig_1317357630437796000.txt"
+    data_names = ("t=new", "t=old")
+    data1 = read_data_from_file(f_new)
+    data2 = read_data_from_file(f_old)
+    plot_contours([data1, data2], [ 1, 2, 3, 4], data_names)

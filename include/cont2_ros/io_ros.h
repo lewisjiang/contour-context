@@ -58,7 +58,8 @@ protected:
     time.fromNSec(ptr->header.stamp);
 
     try {
-      auto tf_gt_last = tfBuffer.lookupTransform("world", "velodyne", time, ros::Duration(0.1));
+//      auto tf_gt_last = tfBuffer.lookupTransform("world", "velodyne", time, ros::Duration(0.1));
+      auto tf_gt_last = tfBuffer.lookupTransform("world", "velo_link", time, ros::Duration(0.1));
       gt_pose_buffer_.template emplace_back(tf_gt_last);
     } catch (tf2::TransformException &ex) {
       lidar_buffer_.pop_back();

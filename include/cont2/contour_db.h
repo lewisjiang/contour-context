@@ -485,8 +485,8 @@ struct LayerDB {
 
 struct ContourDBConfig {
   int num_trees_ = 6;  // max number of trees per layer
-  int max_candi_per_layer_ = 10;  // should we use different values for different layers?
-  int max_total_candi_ = 20;  // should we use different values for different layers?
+  int max_candi_per_layer_ = 20;  // should we use different values for different layers?
+  int max_total_candi_ = 40;  // should we use different values for different layers?
   KeyFloatType max_dist_sq_ = 10.0;
 };
 

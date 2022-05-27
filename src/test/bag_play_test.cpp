@@ -98,7 +98,7 @@ public:
 
     printf("our curr seq: %d, stamp: %lu\n", cnt, time.toNSec());
 
-    if (cnt == 1042) {
+    if (cnt == 1291) {
       printf("Stop here\n");
     }
 
@@ -112,11 +112,11 @@ public:
     cmng_ptr->makeContoursRecurs();
 
     // save images of layers
-//    for (int i = 0; i < config.lv_grads_.size(); i++) {
-//      std::string f_name = PROJ_DIR + "/results/layer_img/contour_" + "lv" + std::to_string(i) + "_" +
-//                           std::to_string(out_ptr->header.stamp) + ".png";
-//      cmng_ptr.saveContourImage(f_name, i);
-//    }
+    for (int i = 0; i < config.lv_grads_.size(); i++) {
+      std::string f_name = PROJ_DIR + "/results/layer_img/contour_" + "lv" + std::to_string(i) + "_" +
+                           std::to_string(out_ptr->header.stamp) + ".png";
+      cmng_ptr->saveContourImage(f_name, i);
+    }
 
 //    // case 1: poll over all data
 //    scans.emplace_back(cmng_ptr);
@@ -131,6 +131,12 @@ public:
 //        if (lc_detect_res.second) {
 //          new_lc_pairs.emplace_back(i, j);
 //
+//          // write file
+//          std::string f_name =
+//              PROJ_DIR + "/results/match_comp_img/lc_" + cmng_ptr->getStrID() + "-" + scans[j]->getStrID() + ".png";
+//          saveMatchedPairImg(config, f_name, *cmng_ptr, *scans[j]);
+//
+//          printf("Image saved: %s-%s\n", cmng_ptr->getStrID().c_str(), scans[j]->getStrID().c_str());
 //          printf("Key squared diffs at different levels: ");
 //          for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
 //            RetrievalKey diff = scans[i]->getRetrievalKey(ll) - scans[j]->getRetrievalKey(ll);
@@ -145,8 +151,9 @@ public:
     // 2.1 query
     std::vector<std::shared_ptr<ContourManager>> candidate_loop;
     std::vector<KeyFloatType> dists_sq;
+    TicToc clk_kdsear;
     contour_db.queryCandidates(*cmng_ptr, candidate_loop, dists_sq);
-    printf("%lu Candidates, ", candidate_loop.size());
+    printf("%lu Candidates in %7.5fs: ", candidate_loop.size(), clk_kdsear.toc());
     if (!candidate_loop.empty())
       printf(" dist sq from %7.4f to %7.4f\n", dists_sq.front(), dists_sq.back());
     else
@@ -157,8 +164,15 @@ public:
       TicToc clk_match_once;
       auto lc_detect_res = ContourManager::calcScanCorresp(*cmng_ptr, *candidate_loop[j]);  // (src, tgt)
       printf("Match once time: %f\n", clk_match_once.toc());
-      if (lc_detect_res.second)
+      if (lc_detect_res.second) {
         new_lc_pairs.emplace_back(cnt, candidate_loop[j]->getIntID());
+        // write file
+        std::string f_name =
+            PROJ_DIR + "/results/match_comp_img/lc_" + cmng_ptr->getStrID() + "-" + candidate_loop[j]->getStrID() +
+            ".png";
+        saveMatchedPairImg(config, f_name, *cmng_ptr, *candidate_loop[j]);
+        printf("Image saved: %s-%s\n", cmng_ptr->getStrID().c_str(), candidate_loop[j]->getStrID().c_str());
+      }
     }
     // 2.2 add new
     contour_db.addScan(cmng_ptr, time.toSec());
@@ -169,6 +183,24 @@ public:
     publishLCConnections(new_lc_pairs, time);
     cnt++;
 
+  }
+
+  static void
+  saveMatchedPairImg(const ContourManagerConfig &config, const std::string &fpath, const ContourManager &cm1,
+                     const ContourManager &cm2) {
+    cv::Mat output((config.n_row_ + 1) * config.lv_grads_.size(), config.n_col_ * 2, CV_8U);
+    output.setTo(255);
+    DCHECK_EQ(config.n_row_, cm1.getConfig().n_row_);
+    DCHECK_EQ(config.n_col_, cm1.getConfig().n_col_);
+    DCHECK_EQ(cm2.getConfig().n_row_, cm1.getConfig().n_row_);
+    DCHECK_EQ(cm2.getConfig().n_col_, cm1.getConfig().n_col_);
+
+    for (int i = 0; i < config.lv_grads_.size(); i++) {
+      cm1.getContourImage(i).copyTo(output(cv::Rect(0, i * config.n_row_ + i, config.n_col_, config.n_row_)));
+      cm2.getContourImage(i).copyTo(
+          output(cv::Rect(config.n_col_, i * config.n_row_ + i, config.n_col_, config.n_row_)));
+    }
+    cv::imwrite(fpath, output);
   }
 
   void publishPath(ros::Time time, const geometry_msgs::TransformStamped &tf_gt_last) {
