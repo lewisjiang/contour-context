@@ -172,12 +172,19 @@ public:
             ".png";
         saveMatchedPairImg(config, f_name, *cmng_ptr, *candidate_loop[j]);
         printf("Image saved: %s-%s\n", cmng_ptr->getStrID().c_str(), candidate_loop[j]->getStrID().c_str());
+//        printf("Key squared diffs at different levels: ");
+//        for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
+//          RetrievalKey diff = cmng_ptr->getRetrievalKey(ll) - candidate_loop[j]->getRetrievalKey(ll);
+//          printf("%7.2f ", diff.squaredNorm());
+//        }
       }
     }
     // 2.2 add new
     contour_db.addScan(cmng_ptr, time.toSec());
     // 2.3 balance
+    TicToc clk_man_tree;
     contour_db.pushAndBalance(seq_cnt++, time.toSec());
+    printf("Rebalance tree cost: %7.5f\n", clk_man_tree.toc());
 
     // plot
     publishLCConnections(new_lc_pairs, time);

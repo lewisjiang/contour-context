@@ -74,7 +74,7 @@ struct ArrayAsKey {
   }
 };
 
-using RetrievalKey = ArrayAsKey<6>;
+using RetrievalKey = ArrayAsKey<11>;
 
 struct ContourManagerConfig {
   std::vector<float> lv_grads_;  // n marks, n+1 levels
@@ -102,7 +102,7 @@ class ContourManager {
   // data
   std::vector<std::vector<std::shared_ptr<ContourView>>> cont_views_;  // TODO: use a parallel vec of vec for points?
   std::vector<int> layer_cell_cnt_;  // total number of cells in each layer/level
-  std::vector<RetrievalKey> layer_keys_;  // the key of each layer
+  std::vector<std::vector<RetrievalKey>> layer_keys_;  // the key of each layer
 
   cv::Mat1f bev_;
   std::vector<std::vector<V2F>> c_height_position_;  // downsampled but not discretized point xy position, another bev
@@ -282,41 +282,75 @@ public:
       }
     }
 
+    const int id_firsts = 4; // combination of the first # will be permuated to calculate keys
     // make retrieval keys
-    for (int ll = 0; ll < cfg_.lv_grads_.size(); ll++) {
-      RetrievalKey key;
-      key.setZero();
-      if (cont_views_[ll].size() > 2 && cont_views_[ll][0]->cell_cnt_ > cfg_.cont_cnt_thres_ &&
-          cont_views_[ll][1]->cell_cnt_ > cfg_.cont_cnt_thres_) { // TODO: make multiple keys for each level
+    for (int id0 = 0; id0 < id_firsts; id0++) {
+      for (int id1 = id0 + 1; id1 < id_firsts; id1++) {
+        for (int ll = 0; ll < cfg_.lv_grads_.size(); ll++) {
+          RetrievalKey key;
+          key.setZero();
+          if (cont_views_[ll].size() > id1 && cont_views_[ll][id0]->cell_cnt_ > cfg_.cont_cnt_thres_ &&
+              cont_views_[ll][id1]->cell_cnt_ > cfg_.cont_cnt_thres_) { // TODO: make multiple keys for each level
 
-        key(0) = std::sqrt(cont_views_[ll][0]->cell_cnt_);
-        key(1) = std::sqrt(cont_views_[ll][1]->cell_cnt_);
-        V2D cc_line = cont_views_[ll][0]->pos_mean_ - cont_views_[ll][1]->pos_mean_;
-        key(2) = cc_line.norm();
+//            // key dim = 6
+//            key(0) = std::sqrt(cont_views_[ll][id0]->cell_cnt_);
+//            key(1) = std::sqrt(cont_views_[ll][id1]->cell_cnt_);
+//            V2D cc_line = cont_views_[ll][id0]->pos_mean_ - cont_views_[ll][id1]->pos_mean_;
+//            key(2) = cc_line.norm();
+//
+//            // distribution of projection perp to cc line
+//            cc_line.normalize();
+//            V2D cc_perp(-cc_line.y(), cc_line.x());
+//
+////        // case1: use cocentic distribution
+////        M2D new_cov = (cont_views_[ll][id0]->getManualCov() * (cont_views_[ll][id0]->cell_cnt_ - 1) +
+////                       cont_views_[ll][id1]->getManualCov() * (cont_views_[ll][id1]->cell_cnt_ - 1)) /
+////                      (cont_views_[ll][id0]->cell_cnt_ + cont_views_[ll][id1]->cell_cnt_ - 1);
+//            // case2: use relative translation preserving distribution
+//            M2D new_cov = ContourView::addContourStat(*cont_views_[ll][id0], *cont_views_[ll][id1]).getManualCov();
+//
+//            key(3) = std::sqrt(cc_perp.transpose() * new_cov * cc_perp);
+//
+//            // distribution of projection to cc line
+//            key(4) = std::sqrt(cc_line.transpose() * new_cov * cc_line);
+//
+//            // the max eigen value of the first ellipse
+//            key(5) = std::sqrt(cont_views_[ll][id0]->eig_vals_(1));
 
-        // distribution of projection perp to cc line
-        cc_line.normalize();
-        V2D cc_perp(-cc_line.y(), cc_line.x());
 
-//        // case1: use cocentic distribution
-//        M2D new_cov = (cont_views_[ll][0]->getManualCov() * (cont_views_[ll][0]->cell_cnt_ - 1) +
-//                       cont_views_[ll][1]->getManualCov() * (cont_views_[ll][1]->cell_cnt_ - 1)) /
-//                      (cont_views_[ll][0]->cell_cnt_ + cont_views_[ll][1]->cell_cnt_ - 1);
-        // case2: use relative translation preserving distribution
-        M2D new_cov = ContourView::addContourStat(*cont_views_[ll][0], *cont_views_[ll][1]).getManualCov();
+            // key dim = 11
+            V2D cc_line = cont_views_[ll][id0]->pos_mean_ - cont_views_[ll][id1]->pos_mean_;
+            key(0) = cc_line.norm();
 
-        key(3) = std::sqrt(cc_perp.transpose() * new_cov * cc_perp);
+            // the max eigen value of the first ellipse
+            key(1) = std::sqrt(cont_views_[ll][id0]->eig_vals_(1));
+            key(2) = std::sqrt(cont_views_[ll][id1]->eig_vals_(1));
 
-        // distribution of projection to cc line
-        key(4) = std::sqrt(cc_line.transpose() * new_cov * cc_line);
+            // the strip descriptors
+            for (int i = 0; i < 4; i++) {
+              key(3 + i * 2) = cont_views_[ll][id0]->strip_width_[i];
+              key(3 + i * 2 + 1) = cont_views_[ll][id1]->strip_width_[i];
+            }
 
-        // the max eigen value of the first ellipse
-        key(5) = std::sqrt(cont_views_[ll][0]->eig_vals_(1));
 
+//            // key dim = 9
+//            V2D cc_line = cont_views_[ll][id0]->pos_mean_ - cont_views_[ll][id1]->pos_mean_;
+//            key(0) = cc_line.norm();
+//
+//            // the max eigen value of the first ellipse
+//            // the strip descriptors, area
+//            for (int i = 0; i < 4; i++) {
+//              key(1 + i * 2) = cont_views_[ll][id0]->strip_width_[i] * std::sqrt(cont_views_[ll][id0]->eig_vals_(1))/4;
+//              key(1 + i * 2 + 1) =
+//                  cont_views_[ll][id1]->strip_width_[i] * std::sqrt(cont_views_[ll][id1]->eig_vals_(1))/4;
+//            }
+
+          }
+
+
+          layer_keys_[ll].emplace_back(key);
+        }
       }
-
-
-      layer_keys_[ll] = key;
     }
 
     // print top 2 features in each
@@ -352,7 +386,8 @@ public:
 
   cv::Mat getContourImage(int level) const {
     cv::Mat mask;
-    cv::threshold(bev_, mask, cfg_.lv_grads_[level], 123, cv::THRESH_TOZERO); // mask is same type and dimension as bev_
+    cv::threshold(bev_, mask, cfg_.lv_grads_[level], 123,
+                  cv::THRESH_TOZERO); // mask is same type and dimension as bev_
     cv::Mat normalized_layer, mask_u8;
     cv::normalize(mask, normalized_layer, 0, 255, cv::NORM_MINMAX, CV_8U);  // dtype=-1 (default): same type as input
     return normalized_layer;
@@ -363,7 +398,7 @@ public:
   }
 
   // TODO: get retrieval key of a scan
-  RetrievalKey getRetrievalKey(int level) const {
+  std::vector<RetrievalKey> getRetrievalKey(int level) const {
     DCHECK_GE(level, 0);
     DCHECK_GT(cont_views_.size(), level);
     return layer_keys_[level];
@@ -378,6 +413,7 @@ public:
   }
 
   // TODO: check if contours in two scans can be accepted as from the same heatmap, and return the transform
+  // TODO: when retrieval key contains the combination, we should only look into that combination.
   // T_tgt = T_delta * T_src
   static std::pair<Eigen::Isometry2d, bool> calcScanCorresp(const ContourManager &src, const ContourManager &tgt) {
     DCHECK_EQ(src.cont_views_.size(), tgt.cont_views_.size());

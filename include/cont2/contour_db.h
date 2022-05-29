@@ -485,9 +485,9 @@ struct LayerDB {
 
 struct ContourDBConfig {
   int num_trees_ = 6;  // max number of trees per layer
-  int max_candi_per_layer_ = 20;  // should we use different values for different layers?
-  int max_total_candi_ = 40;  // should we use different values for different layers?
-  KeyFloatType max_dist_sq_ = 10.0;
+  int max_candi_per_layer_ = 40;  // should we use different values for different layers?
+  int max_total_candi_ = 80;  // should we use different values for different layers?
+  KeyFloatType max_dist_sq_ = 200.0;
 };
 
 // manages the whole database of contours for place re-identification
@@ -514,18 +514,33 @@ public:
     // for each layer
     std::vector<std::pair<size_t, KeyFloatType>> q_container;
     for (int ll = 0; ll < q_levels_.size(); ll++) {
-      std::vector<std::pair<size_t, KeyFloatType>> tmp_res;
-      layer_db_[ll].layerKNNSearch(q_cont.getRetrievalKey(q_levels_[ll]), cfg_.max_candi_per_layer_, cfg_.max_dist_sq_,
-                                   tmp_res);
-      q_container.insert(q_container.end(), tmp_res.begin(), tmp_res.end());  // Q:different thres for different levels?
+      size_t size_beg = q_container.size();
+      for (const auto &permu_key: q_cont.getRetrievalKey(q_levels_[ll])) {
+        if (permu_key.sum() != 0) {
+          std::vector<std::pair<size_t, KeyFloatType>> tmp_res;
+
+          layer_db_[ll].layerKNNSearch(permu_key, cfg_.max_candi_per_layer_, cfg_.max_dist_sq_, tmp_res);
+          q_container.insert(q_container.end(), tmp_res.begin(),
+                             tmp_res.end());  // Q:different thres for different levels?
+        }
+      }
+      // limit number of returned values in layer
+      std::sort(q_container.begin() + size_beg, q_container.end(),
+                [&](const std::pair<size_t, KeyFloatType> &a, const std::pair<size_t, KeyFloatType> &b) {
+                  return a.second < b.second;
+                });
+      if (q_container.size() > cfg_.max_candi_per_layer_ + size_beg)
+        q_container.resize(cfg_.max_candi_per_layer_ + size_beg);
+
     }
 
-    std::sort(q_container.begin(), q_container.end(),
-              [&](const std::pair<size_t, KeyFloatType> &a, const std::pair<size_t, KeyFloatType> &b) {
-                return a.second < b.second;
-              });
-    if (q_container.size() > cfg_.max_total_candi_)
-      q_container.resize(cfg_.max_total_candi_);
+//    // limit number of returned values as whole
+//    std::sort(q_container.begin(), q_container.end(),
+//              [&](const std::pair<size_t, KeyFloatType> &a, const std::pair<size_t, KeyFloatType> &b) {
+//                return a.second < b.second;
+//              });
+//    if (q_container.size() > cfg_.max_total_candi_)
+//      q_container.resize(cfg_.max_total_candi_);
 
     std::set<size_t> used_gidx;
     printf("Query dists_sq: ");
@@ -549,7 +564,9 @@ public:
   // TODO: 2. add a scan, and retrieval data to buffer
   void addScan(const std::shared_ptr<ContourManager> &added, double curr_timestamp) {
     for (int ll = 0; ll < q_levels_.size(); ll++) {
-      layer_db_[ll].pushBuffer(added->getRetrievalKey(q_levels_[ll]), curr_timestamp, all_bevs_.size());
+      for (const auto &permu_key: added->getRetrievalKey(q_levels_[ll]))
+        if (permu_key.sum() != 0)
+          layer_db_[ll].pushBuffer(permu_key, curr_timestamp, all_bevs_.size());
     }
     all_bevs_.emplace_back(added);
   }

@@ -44,6 +44,7 @@ struct ContourViewConfig {
   int min_cell_cov_ = 4;
   double point_sigma_ = 1.0; // have nothing to do with resolution: on pixel only
   double com_bias_thres = 0.5;  // com dist from geometric center
+  int half_strip_num_ = 4;
 };
 
 class ContourView {
@@ -81,6 +82,8 @@ public:
 
   // Raw data (the pixels that belong to this Contour. Is is necessary?)
   // TODO
+  std::vector<V2D> voxels_pos_;
+  std::vector<float> strip_width_;
 
   // hierarchy
   std::shared_ptr<ContourView> parent_;
@@ -94,6 +97,7 @@ public:
     cell_pos_sum_.setZero();
     cell_pos_tss_.setZero();
     cell_vol3_torq_.setZero();
+    DCHECK_GE(cfg_.half_strip_num_, 2);
   };
 
   // TODO: call this function everytime encounters a pixel belonging to this connected component
@@ -106,6 +110,7 @@ public:
     cell_pos_tss_ += v_rc * v_rc.transpose();
     cell_vol3_ += height;
     cell_vol3_torq_ += height * v_rc;
+    voxels_pos_.emplace_back(v_rc);
   }
 
   void runningStatsF(float curr_row, float curr_col, float height) {   // a more accurate one with continuous coordinate
@@ -117,6 +122,7 @@ public:
     cell_pos_tss_ += v_rc * v_rc.transpose();
     cell_vol3_ += height;
     cell_vol3_torq_ += height * v_rc;
+    voxels_pos_.emplace_back(v_rc);
   }
 
   // TOxDO: 1. build children_ from a current contour
@@ -128,6 +134,8 @@ public:
     vol3_mean_ = cell_vol3_ / cell_cnt_;
     com_ = cell_vol3_torq_ / cell_vol3_;
 
+    strip_width_.clear();
+
     // eccentricity:
     if (cell_cnt_ < cfg_.min_cell_cov_) {
       pos_cov_ = M2D::Identity() * cfg_.point_sigma_ * cfg_.point_sigma_;
@@ -135,6 +143,7 @@ public:
       eig_vecs_.setIdentity();
       ecc_feat_ = false;
       com_feat_ = false;
+      strip_width_.resize(cfg_.half_strip_num_, 0);
     } else {
       pos_cov_ = (cell_pos_tss_ - cell_pos_sum_ * pos_mean_.transpose() - pos_mean_ * cell_pos_sum_.transpose() +
                   pos_mean_ * pos_mean_.transpose() * cell_cnt_) / (cell_cnt_ - 1);
@@ -151,6 +160,81 @@ public:
 
       // vol/weight of mountain:
       com_feat_ = centerOfMassSalient();
+
+      // describe ellipse with ratio areas
+      std::vector<V2D> strips;  // {perp long axis:along long axis}, since the large eig vec is the second one
+      for (auto &voxels_po: voxels_pos_) {
+        strips.emplace_back((voxels_po - pos_mean_).transpose() * eig_vecs_);
+      }
+      double strip_beg = 1e6, strip_end = -1e6;
+      for (const auto &strip: strips) {
+        strip_beg = strip.y() < strip_beg ? strip.y() : strip_beg;
+        strip_end = strip.y() > strip_end ? strip.y() : strip_end;
+      }
+      strip_end += 1e-3;
+
+      // descriptor 1: rotation invariant
+//      std::vector<std::pair<double, double>> bins(cfg_.half_strip_num_, {-1, -1});  // interpolation (1/2)
+//      bins.front() = {0, 0};
+//      bins.back() = {0, 0};
+
+      std::vector<std::pair<double, double>> bins(cfg_.half_strip_num_, {0.0, 0.0});
+      std::vector<std::pair<int, int>> bins_elem_cnt(cfg_.half_strip_num_, {0, 0});
+      double step = (strip_end - strip_beg) / cfg_.half_strip_num_;
+      for (auto &strip: strips) {
+        int bin_idx = std::floor((strip.y() - strip_beg) / step);
+//        // case 1: use max value as feature "bit":
+//        if (strip.x() >= 0)
+//          bins[bin_idx].first = bins[bin_idx].first > strip.x() ? bins[bin_idx].first : strip.x();
+//        else
+//          bins[bin_idx].second = bins[bin_idx].second > -strip.x() ? bins[bin_idx].second : -strip.x();
+
+        // case 2 (1/2): use mean value as feature bit
+        if (strip.x() >= 0) {
+          bins[bin_idx].first += strip.x();
+          bins_elem_cnt[bin_idx].first++;
+        } else {
+          bins[bin_idx].second -= strip.x();
+          bins_elem_cnt[bin_idx].second++;
+        }
+      }
+
+      // case 2 (2/2)
+      for (int i = 0; i < cfg_.half_strip_num_; i++) {
+        if (bins_elem_cnt[i].first)
+          bins[i].first /= bins_elem_cnt[i].first;
+        if (bins_elem_cnt[i].second)
+          bins[i].second /= bins_elem_cnt[i].second;
+      }
+
+//      // // fill the -1 s, interpolation (2/2)
+//      // // NOTE: we may not need interpolate, since very small ellipse are not very likely to be chosen as features.
+//      int p1 = 0, p2 = 0;
+//      for (int i = 1; i < cfg_.half_strip_num_; i++) {    // the first and last bin always has elements (val !=-1)
+//        if (bins[i].first >= 0) {
+//          if (i - p1 > 1) {  // we can do w/o this if
+//            double diff_lev = (bins[i].first - bins[p1].first) / (i - p1);
+//            for (int j = p1 + 1; j < i; j++)
+//              bins[j].first = (j - p1) * diff_lev + bins[p1].first;
+//          }
+//          p1 = i;
+//        }
+//        if (bins[i].second >= 0) {
+//          if (i - p2 > 1) {
+//            double diff_lev = (bins[i].second - bins[p2].second) / (i - p2);
+//            for (int j = p2 + 1; j < i; j++)
+//              bins[j].second = (j - p2) * diff_lev + bins[p2].second;
+//          }
+//          p2 = i;
+//        }
+//      }
+
+      // // add
+      for (int i = 0; i < cfg_.half_strip_num_; i++) {
+        strip_width_.emplace_back(bins[i].first + bins[cfg_.half_strip_num_ - 1 - i].second);
+      }
+
+
     }
 
   }
