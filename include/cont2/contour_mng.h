@@ -18,6 +18,7 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+#include <utility>
 
 #include "tools/bm_util.h"
 
@@ -263,6 +264,37 @@ public:
     cv::imwrite("cart_context-" + str_id_ + ".png", view);
   }
 
+  template<typename PointType>
+  ///
+  /// \tparam PointType
+  /// \param ptr_gapc
+  /// \param str_id
+  void makeBEV(typename pcl::PointCloud<PointType>::ConstPtr &ptr_gapc, std::string str_id) {  //
+    CHECK(ptr_gapc);
+    CHECK_GT(ptr_gapc->size(), 10);
+
+    // Downsample before using?
+    for (const auto &pt: ptr_gapc->points) {
+      std::pair<int, int> rc = hashPointToImage<PointType>(pt);
+      if (rc.first > 0) {
+        float height = cfg_.lidar_height_ + pt.z;
+        if (bev_(rc.first, rc.second) < height) {
+          bev_(rc.first, rc.second) = height;
+          c_height_position_[rc.first][rc.second] = pointToContRowCol(V2F(pt.x, pt.y));  // same coord as row and col
+        }
+        max_bin_val_ = max_bin_val_ < height ? height : max_bin_val_;
+        min_bin_val_ = min_bin_val_ > height ? height : min_bin_val_;
+      }
+    }
+    printf("Max/Min bin height: %f %f\n", max_bin_val_, min_bin_val_);
+    str_id_ = std::move(str_id);
+
+    cv::Mat mask, view;
+    inRange(bev_, cv::Scalar::all(0), cv::Scalar::all(max_bin_val_), mask);
+    normalize(bev_, view, 0, 255, cv::NORM_MINMAX, -1, mask);
+    cv::imwrite("cart_context-" + str_id_ + ".png", view);
+  }
+
   void makeContoursRecurs() {
     cv::Rect full_bev(0, 0, bev_.cols, bev_.rows);
     visualization = cv::Mat::zeros(cfg_.n_row_, cfg_.n_col_, CV_8U);
@@ -366,7 +398,7 @@ public:
 //    }
 
     // save statistics of this scan:
-    std::string fpath = std::string(PJSRCDIR) + "/results/contours_orig_" + str_id_ + ".txt";
+    std::string fpath = std::string(PJSRCDIR) + "/results/contours_orig-" + str_id_ + ".txt";
     saveContours(fpath);
 
 //    cv::imwrite("cart_context-mask-" + std::to_string(3) + "-" + str_id_ + "rec.png", visualization);
@@ -559,6 +591,27 @@ public:
     }
 
     return ret;
+  }
+
+  static void
+  saveMatchedPairImg(const std::string &fpath, const ContourManager &cm1,
+                     const ContourManager &cm2) {
+    ContourManagerConfig config = cm2.getConfig();
+
+    DCHECK_EQ(config.n_row_, cm1.getConfig().n_row_);
+    DCHECK_EQ(config.n_col_, cm1.getConfig().n_col_);
+    DCHECK_EQ(cm2.getConfig().n_row_, cm1.getConfig().n_row_);
+    DCHECK_EQ(cm2.getConfig().n_col_, cm1.getConfig().n_col_);
+
+    cv::Mat output((config.n_row_ + 1) * config.lv_grads_.size(), config.n_col_ * 2, CV_8U);
+    output.setTo(255);
+
+    for (int i = 0; i < config.lv_grads_.size(); i++) {
+      cm1.getContourImage(i).copyTo(output(cv::Rect(0, i * config.n_row_ + i, config.n_col_, config.n_row_)));
+      cm2.getContourImage(i).copyTo(
+          output(cv::Rect(config.n_col_, i * config.n_row_ + i, config.n_col_, config.n_row_)));
+    }
+    cv::imwrite(fpath, output);
   }
 
 

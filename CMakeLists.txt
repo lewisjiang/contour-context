@@ -113,6 +113,19 @@ target_link_libraries(${PROJECT_NAME}_nanokdt_test
         ${catkin_LIBRARIES}
         )
 
+### 1.3 test read bin kitti
+add_executable(${PROJECT_NAME}_kitti_bin_test
+        src/test/kitti_read_bin_test.cpp
+        )
+target_link_libraries(${PROJECT_NAME}_kitti_bin_test
+        ${PROJECT_NAME}contops
+        ${glog_LIBRARIES}
+        ${catkin_LIBRARIES}
+        ${PCL_LIBRARIES}
+        ${CERES_LIBRARIES}
+        ${OpenCV_LIBS}
+        )
+
 #add_executable(${PROJECT_NAME}_ros_lidar_test
 #        src/test/dummy_test.cpp
 #        )

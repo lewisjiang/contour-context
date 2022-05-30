@@ -6,9 +6,11 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
+        - /Grid1
         - /Path1
         - /lc connect1
         - /MarkerArray1
+        - /MarkerArray2
       Splitter Ratio: 0.5
     Tree Height: 2870
   - Class: rviz/Selection
@@ -38,7 +40,7 @@ Visualization Manager:
   Class: ""
   Displays:
     - Alpha: 0.5
-      Cell Size: 1
+      Cell Size: 10
       Class: rviz/Grid
       Color: 160; 160; 164
       Enabled: true
@@ -95,6 +97,14 @@ Visualization Manager:
         {}
       Queue Size: 100
       Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /pose_index
+      Name: MarkerArray
+      Namespaces:
+        {}
+      Queue Size: 100
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -123,7 +133,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 7.403861999511719
+      Distance: 31.058481216430664
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -131,17 +141,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 2.8765087127685547
-        Y: 1.1936506032943726
-        Z: 0.8042775988578796
-      Focal Shape Fixed Size: true
+        X: 0
+        Y: 0
+        Z: 0
+      Focal Shape Fixed Size: false
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.4847968816757202
+      Pitch: 0.46539807319641113
       Target Frame: <Fixed Frame>
-      Yaw: 3.868586301803589
+      Yaw: 2.9453983306884766
     Saved: ~
 Window Geometry:
   Displays:

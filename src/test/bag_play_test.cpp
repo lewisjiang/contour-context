@@ -170,7 +170,7 @@ public:
         std::string f_name =
             PROJ_DIR + "/results/match_comp_img/lc_" + cmng_ptr->getStrID() + "-" + candidate_loop[j]->getStrID() +
             ".png";
-        saveMatchedPairImg(config, f_name, *cmng_ptr, *candidate_loop[j]);
+        ContourManager::saveMatchedPairImg(f_name, *cmng_ptr, *candidate_loop[j]);
         printf("Image saved: %s-%s\n", cmng_ptr->getStrID().c_str(), candidate_loop[j]->getStrID().c_str());
 //        printf("Key squared diffs at different levels: ");
 //        for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
@@ -192,23 +192,7 @@ public:
 
   }
 
-  static void
-  saveMatchedPairImg(const ContourManagerConfig &config, const std::string &fpath, const ContourManager &cm1,
-                     const ContourManager &cm2) {
-    cv::Mat output((config.n_row_ + 1) * config.lv_grads_.size(), config.n_col_ * 2, CV_8U);
-    output.setTo(255);
-    DCHECK_EQ(config.n_row_, cm1.getConfig().n_row_);
-    DCHECK_EQ(config.n_col_, cm1.getConfig().n_col_);
-    DCHECK_EQ(cm2.getConfig().n_row_, cm1.getConfig().n_row_);
-    DCHECK_EQ(cm2.getConfig().n_col_, cm1.getConfig().n_col_);
 
-    for (int i = 0; i < config.lv_grads_.size(); i++) {
-      cm1.getContourImage(i).copyTo(output(cv::Rect(0, i * config.n_row_ + i, config.n_col_, config.n_row_)));
-      cm2.getContourImage(i).copyTo(
-          output(cv::Rect(config.n_col_, i * config.n_row_ + i, config.n_col_, config.n_row_)));
-    }
-    cv::imwrite(fpath, output);
-  }
 
   void publishPath(ros::Time time, const geometry_msgs::TransformStamped &tf_gt_last) {
     path_msg.header.stamp = time;

@@ -158,9 +158,9 @@ if __name__ == "__main__":
     # plot_contours([dat1, dat4], [0, 1, 2, 3, 4, 5], data_names)
     # # plot_contours([dat1, dat2], [1, 2, 3, 4], data_names)
 
-    f_new = "../results/contours_orig_1317357723149910000.txt"
-    f_old = "../results/contours_orig_1317357630437796000.txt"
-    data_names = ("t=new", "t=old")
+    f_new = "../results/contours_orig-0000000034.txt"
+    f_old = "../results/contours_orig-0000002437.txt"
+    data_names = ("t=old", "t=new")
     data1 = read_data_from_file(f_new)
     data2 = read_data_from_file(f_old)
-    plot_contours([data1, data2], [ 1, 2, 3, 4], data_names)
+    plot_contours([data1, data2], [1, 2, 3, 4], data_names)
