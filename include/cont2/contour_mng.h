@@ -8,7 +8,9 @@
 #include <iostream>
 #include <fstream>
 #include <cstdlib>
+#include <bitset>
 #include "cont2/contour.h"
+#include "tools/algos.h"
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -18,6 +20,11 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+
+//// For SURF:
+//#include "opencv2/features2d.hpp"
+//#include "opencv2/xfeatures2d.hpp"
+
 #include <utility>
 
 #include "tools/bm_util.h"
@@ -45,7 +52,7 @@ struct ArrayAsKey {
 
   const KeyFloatType &operator[](size_t i) const { return vals[i]; }
 
-  ArrayAsKey<sz> operator-(ArrayAsKey<sz> const &obj) {
+  ArrayAsKey<sz> operator-(ArrayAsKey<sz> const &obj) const {
     ArrayAsKey<sz> res;
     for (int i = 0; i < sz; i++)
       res.vals[i] = vals[i] - obj.vals[i];
@@ -75,7 +82,8 @@ struct ArrayAsKey {
   }
 };
 
-using RetrievalKey = ArrayAsKey<11>;
+const int RET_KEY_DIM = 3;
+using RetrievalKey = ArrayAsKey<RET_KEY_DIM>;
 
 struct ContourManagerConfig {
   std::vector<float> lv_grads_;  // n marks, n+1 levels
@@ -86,6 +94,129 @@ struct ContourManagerConfig {
   float blind_sq_ = 9.0f;
 
   int cont_cnt_thres_ = 5; // the cell count threshold dividing a shaped blob from a point
+};
+
+const int BITS_PER_LAYER = 64;
+const int DIST_BIN_LAYERS[] = {1, 2, 3, 4};  // the layers for the dist key
+const int NUM_BIN_KEY_LAYER = sizeof(DIST_BIN_LAYERS) / sizeof(int);
+
+struct ConstellationPair {  // given a pair of ContourManager, this records the seq of 2 matched contours at certain level
+  int level{};
+  int seq_src{};
+  int seq_tgt{};
+
+  ConstellationPair(int l, int s, int t) : level(l), seq_src(s), seq_tgt(t) {}
+};
+
+struct BCI { //binary constellation identity
+  struct RelativePoint {  // a point/star seen from an anchor contour
+    int level{};
+    int seq{};
+    float r{};
+    float theta{};
+
+    RelativePoint(int l, int a, float b, float c) : level(l), seq(a), r(b), theta(c) {}
+
+//    RelativePoint() = default;
+  };
+
+  struct OriePairComp {
+    int level;  // the level at which the pairing occurs
+    int neigh_src;
+    int neigh_tgt;
+    float orie_diff;
+
+    OriePairComp(int l, int s, int t, float o) : level(l), neigh_src(s), neigh_tgt(t), orie_diff(o) {}
+  };
+
+  // Four member variable
+  std::bitset<BITS_PER_LAYER * NUM_BIN_KEY_LAYER> dist_bin_;
+  std::map<u_int16_t, std::vector<RelativePoint>> dist_bit_neighbors_;  // {bit position in the bit vector: [neighbours point info, ...]}
+  int piv_seq_, level_;  // level and seq of the anchor
+
+  explicit BCI(int seq, int lev) : dist_bin_(0), piv_seq_(seq), level_(lev) {}
+
+  static bool checkConstellSim(const BCI &src, const BCI &tgt, std::vector<ConstellationPair> &constell) {
+    DCHECK_EQ(src.level_, tgt.level_);
+    std::bitset<BITS_PER_LAYER * NUM_BIN_KEY_LAYER> res1, res2, res3;
+    res1 = src.dist_bin_ & tgt.dist_bin_;
+    res2 = (src.dist_bin_ << 1) & tgt.dist_bin_;
+    res3 = (src.dist_bin_ >> 1) & tgt.dist_bin_;
+    int ovlp1 = res1.count(), ovlp2 = res2.count(), ovlp3 = res3.count();
+    int ovlp_sum = ovlp1 + ovlp2 + ovlp3;
+    int max_ele = std::max(ovlp1, std::max(ovlp2, ovlp3));
+
+    // the anchors are assumed to be matched
+    if (ovlp_sum >= 10 && max_ele >= 5) {
+      // check the angular for constellation
+      std::vector<OriePairComp> potential_pairs;
+
+      for (u_int16_t b = 1; b < BITS_PER_LAYER * NUM_BIN_KEY_LAYER - 1; b++) {
+        if (tgt.dist_bin_[b])
+          for (const auto &rp2: tgt.dist_bit_neighbors_.at(b)) {
+            if (res1[b])  // .test(pos) will throw out-of-range exception
+              for (const auto &rp1: src.dist_bit_neighbors_.at(b)) {
+                DCHECK_EQ(rp1.level, rp2.level);
+                potential_pairs.emplace_back(rp1.level, rp1.seq, rp2.seq, rp2.theta - rp1.theta);
+              }
+
+            if (res2[b])
+              // align after shift left, but order starts from right, so = origin-1
+              for (const auto &rp1: src.dist_bit_neighbors_.at(b - 1)) {
+                DCHECK_EQ(rp1.level, rp2.level);
+                potential_pairs.emplace_back(rp1.level, rp1.seq, rp2.seq, rp2.theta - rp1.theta);
+              }
+
+            if (res3[b])
+              for (const auto &rp1: src.dist_bit_neighbors_.at(b + 1)) {
+                DCHECK_EQ(rp1.level, rp2.level);
+                potential_pairs.emplace_back(rp1.level, rp1.seq, rp2.seq, rp2.theta - rp1.theta);
+              }
+          }
+      }
+      // potential_pairs.size() must >= ovlp_sum
+      for (auto &x: potential_pairs)
+        clampAng<float>(x.orie_diff);
+
+      std::sort(potential_pairs.begin(), potential_pairs.end(), [&](const OriePairComp &a, const OriePairComp &b) {
+        return a.orie_diff < b.orie_diff;
+      });
+
+      const float angular_range = M_PI / 16; // 0.2 rad, 11 deg
+      const int thres_in_range = 5;  // the min number of pairs in range that assumed to be the true delta theta
+      int max_in_range_beg = 0, max_in_range = 1, pot_sz = potential_pairs.size(), p1 = 0, p2 = 0;
+      while (p1 < pot_sz) {
+        if (potential_pairs[p2 % pot_sz].orie_diff - potential_pairs[p1].orie_diff + 2 * M_PI * int(p2 / pot_sz) >
+            angular_range)
+          p1++;
+        else {
+          if (p2 - p1 + 1 > max_in_range) {
+            max_in_range = p2 - p1 + 1;
+            max_in_range_beg = p1;
+          }
+          p2++;
+        }
+      }
+
+      if (max_in_range < thres_in_range)
+        return false;
+
+      constell.clear();
+      constell.reserve(max_in_range + 1);
+
+      for (int i = max_in_range_beg; i < max_in_range + max_in_range_beg; i++) {
+        constell.emplace_back(potential_pairs[i % pot_sz].level, potential_pairs[i % pot_sz].neigh_src,
+                              potential_pairs[i % pot_sz].neigh_tgt);
+      }
+      constell.emplace_back(src.level_, src.piv_seq_, tgt.piv_seq_);  // the pivots are also a pair.
+
+      return true;
+
+
+    } else {
+      return false;
+    }
+  }
 };
 
 
@@ -104,6 +235,7 @@ class ContourManager {
   std::vector<std::vector<std::shared_ptr<ContourView>>> cont_views_;  // TODO: use a parallel vec of vec for points?
   std::vector<int> layer_cell_cnt_;  // total number of cells in each layer/level
   std::vector<std::vector<RetrievalKey>> layer_keys_;  // the key of each layer
+  std::vector<std::vector<BCI>> layer_key_bci_;
 
   cv::Mat1f bev_;
   std::vector<std::vector<V2F>> c_height_position_;  // downsampled but not discretized point xy position, another bev
@@ -148,71 +280,7 @@ protected:
   }
 
   void makeContourRecursiveHelper(const cv::Rect &cc_roi, const cv::Mat1b &cc_mask, int level,
-                                  const std::shared_ptr<ContourView> &parent) {
-    DCHECK(bool(level)==bool(parent));
-    if (level >= cfg_.lv_grads_.size())
-      return;
-
-    float h_min = cfg_.lv_grads_[level], h_max = VAL_ABS_INF_;
-
-    cv::Mat1f bev_roi = bev_(cc_roi), thres_roi;
-    cv::threshold(bev_roi, thres_roi, h_min, 255, cv::THRESH_BINARY);
-
-    cv::Mat1b bin_bev_roi;
-    thres_roi.convertTo(bin_bev_roi, CV_8U);
-
-    if (level)
-//      cv::bitwise_and(bin_bev_roi, bin_bev_roi, bin_bev_roi, cc_mask);  // Wrong method: some pixels may be unaltered since neglected by mask
-      cv::bitwise_and(bin_bev_roi, cc_mask, bin_bev_roi);
-
-    if (level < cfg_.lv_grads_.size() - 1)
-      h_max = cfg_.lv_grads_[level - 1];
-
-    // 2. calculate connected blobs
-    cv::Mat1i labels, stats;  // int (CV_32S)
-    cv::Mat centroids;  // not in use
-    cv::connectedComponentsWithStats(bin_bev_roi, labels, stats, centroids, 8, CV_32S);   // on local patch
-
-    // 3. create contours for each connected component
-    // https://stackoverflow.com/questions/37745274/opencv-find-perimeter-of-a-connected-component/48618464#48618464
-    for (int n = 1; n < stats.rows; n++) {  // n=0: background
-//      printf("Area: %d\n", stats.at<int>(n, cv::CC_STAT_AREA));
-
-      //Rectangle around the connected component
-      // Rect: col0, row0, n_col, n_row
-      cv::Rect rect_g(stats(n, 0) + cc_roi.x, stats(n, 1) + cc_roi.y, stats(n, 2), stats(n, 3)); // global: on bev
-      cv::Rect rect_l(stats(n, 0), stats(n, 1), stats(n, 2), stats(n, 3)); // local: relative to bev_roi
-
-      cv::Mat1b mask_n = labels(rect_l) == n;
-
-      std::shared_ptr<ContourView> ptr_tmp_cv(new ContourView(level, h_min, h_max, rect_g, parent));
-
-      for (int i = 0; i < rect_l.height; i++)
-        for (int j = 0; j < rect_l.width; j++)
-          if (mask_n(i, j)) {
-//            ptr_tmp_cv->runningStats(i + rect_g.y, j + rect_g.x, bev_(i + rect_g.y, j + rect_g.x)); // discrete
-            V2F c_point = c_height_position_[i + rect_g.y][j + rect_g.x];
-            ptr_tmp_cv->runningStatsF(c_point.x(), c_point.y(), bev_(i + rect_g.y, j + rect_g.x)); // continuous
-          }
-      ptr_tmp_cv->calcStatVals();
-      DCHECK(ptr_tmp_cv->cell_cnt_ == stats(n, 4));
-      cont_views_[level].emplace_back(ptr_tmp_cv);    // add to the manager's matrix
-      if (parent)
-        parent->children_.emplace_back(ptr_tmp_cv);
-
-      // recurse
-      // Get the mask for the contour
-
-//      printf("contour ROI: %d, %d, level: %d\n", mask_n.rows, mask_n.cols, level);
-      makeContourRecursiveHelper(rect_g, mask_n, level + 1, ptr_tmp_cv);
-
-//      if (level == 2) {
-//        cv::bitwise_or(mask_n, visualization(rect_g), visualization(rect_g));
-//      }
-
-    }
-
-  }
+                                  const std::shared_ptr<ContourView> &parent);
 
 public:
   explicit ContourManager(const ContourManagerConfig &config, int int_id) : cfg_(config), int_id_(int_id) {
@@ -231,37 +299,7 @@ public:
     cont_views_.resize(cfg_.lv_grads_.size());
     layer_cell_cnt_.resize(cfg_.lv_grads_.size());
     layer_keys_.resize(cfg_.lv_grads_.size());
-
-  }
-
-  template<typename PointType>
-  ///
-  /// \tparam PointType
-  /// \param ptr_gapc Gravity aligned point cloud, better undistorted. Z axis should point up.
-  void makeBEV(typename pcl::PointCloud<PointType>::ConstPtr &ptr_gapc) {  //
-    CHECK(ptr_gapc);
-    CHECK_GT(ptr_gapc->size(), 10);
-
-    // Downsample before using?
-    for (const auto &pt: ptr_gapc->points) {
-      std::pair<int, int> rc = hashPointToImage<PointType>(pt);
-      if (rc.first > 0) {
-        float height = cfg_.lidar_height_ + pt.z;
-        if (bev_(rc.first, rc.second) < height) {
-          bev_(rc.first, rc.second) = height;
-          c_height_position_[rc.first][rc.second] = pointToContRowCol(V2F(pt.x, pt.y));  // same coord as row and col
-        }
-        max_bin_val_ = max_bin_val_ < height ? height : max_bin_val_;
-        min_bin_val_ = min_bin_val_ > height ? height : min_bin_val_;
-      }
-    }
-    printf("Max/Min bin height: %f %f\n", max_bin_val_, min_bin_val_);
-    str_id_ = std::to_string(ptr_gapc->header.stamp);
-
-    cv::Mat mask, view;
-    inRange(bev_, cv::Scalar::all(0), cv::Scalar::all(max_bin_val_), mask);
-    normalize(bev_, view, 0, 255, cv::NORM_MINMAX, -1, mask);
-    cv::imwrite("cart_context-" + str_id_ + ".png", view);
+    layer_key_bci_.resize(cfg_.lv_grads_.size());
   }
 
   template<typename PointType>
@@ -269,7 +307,7 @@ public:
   /// \tparam PointType
   /// \param ptr_gapc
   /// \param str_id
-  void makeBEV(typename pcl::PointCloud<PointType>::ConstPtr &ptr_gapc, std::string str_id) {  //
+  void makeBEV(typename pcl::PointCloud<PointType>::ConstPtr &ptr_gapc, std::string str_id = "") {  //
     CHECK(ptr_gapc);
     CHECK_GT(ptr_gapc->size(), 10);
 
@@ -287,7 +325,10 @@ public:
       }
     }
     printf("Max/Min bin height: %f %f\n", max_bin_val_, min_bin_val_);
-    str_id_ = std::move(str_id);
+    if (!str_id.empty())
+      str_id_ = std::move(str_id);
+    else
+      str_id_ = std::to_string(ptr_gapc->header.stamp);
 
     cv::Mat mask, view;
     inRange(bev_, cv::Scalar::all(0), cv::Scalar::all(max_bin_val_), mask);
@@ -314,75 +355,134 @@ public:
       }
     }
 
-    const int id_firsts = 4; // combination of the first # will be permuated to calculate keys
-    // make retrieval keys
-    for (int id0 = 0; id0 < id_firsts; id0++) {
-      for (int id1 = id0 + 1; id1 < id_firsts; id1++) {
-        for (int ll = 0; ll < cfg_.lv_grads_.size(); ll++) {
-          RetrievalKey key;
-          key.setZero();
-          if (cont_views_[ll].size() > id1 && cont_views_[ll][id0]->cell_cnt_ > cfg_.cont_cnt_thres_ &&
-              cont_views_[ll][id1]->cell_cnt_ > cfg_.cont_cnt_thres_) { // TODO: make multiple keys for each level
+    /// exp
+    for (int i = 0; i < std::min(10, (int) cont_views_[1].size()); i++) {
+      printf("%7.4f, %7.4f,\n", cont_views_[1][i]->pos_mean_.y(), cont_views_[1][i]->pos_mean_.x());
+    }
 
-//            // key dim = 6
-//            key(0) = std::sqrt(cont_views_[ll][id0]->cell_cnt_);
-//            key(1) = std::sqrt(cont_views_[ll][id1]->cell_cnt_);
-//            V2D cc_line = cont_views_[ll][id0]->pos_mean_ - cont_views_[ll][id1]->pos_mean_;
-//            key(2) = cc_line.norm();
+    /// make retrieval keys
+//    // case 1: traditional key making: from top-two sized contours
+//    const int id_firsts = 4; // combination of the first # will be permuated to calculate keys
+//    for (int ll = 0; ll < cfg_.lv_grads_.size(); ll++) {
+//      for (int id0 = 0; id0 < id_firsts; id0++) {
+//        for (int id1 = id0 + 1; id1 < id_firsts; id1++) {
+//          RetrievalKey key;
+//          key.setZero();
+//          if (cont_views_[ll].size() > id1 && cont_views_[ll][id0]->cell_cnt_ > cfg_.cont_cnt_thres_ &&
+//              cont_views_[ll][id1]->cell_cnt_ > cfg_.cont_cnt_thres_) { // TODO: make multiple keys for each level
 //
-//            // distribution of projection perp to cc line
-//            cc_line.normalize();
-//            V2D cc_perp(-cc_line.y(), cc_line.x());
+//            if (RET_KEY_DIM == 6) {
+//              // key dim = 6
+//              key(0) = std::sqrt(cont_views_[ll][id0]->cell_cnt_);
+//              key(1) = std::sqrt(cont_views_[ll][id1]->cell_cnt_);
+//              V2D cc_line = cont_views_[ll][id0]->pos_mean_ - cont_views_[ll][id1]->pos_mean_;
+//              key(2) = cc_line.norm();
+//
+//              // distribution of projection perp to cc line
+//              cc_line.normalize();
+//              V2D cc_perp(-cc_line.y(), cc_line.x());
 //
 ////        // case1: use cocentic distribution
 ////        M2D new_cov = (cont_views_[ll][id0]->getManualCov() * (cont_views_[ll][id0]->cell_cnt_ - 1) +
 ////                       cont_views_[ll][id1]->getManualCov() * (cont_views_[ll][id1]->cell_cnt_ - 1)) /
 ////                      (cont_views_[ll][id0]->cell_cnt_ + cont_views_[ll][id1]->cell_cnt_ - 1);
-//            // case2: use relative translation preserving distribution
-//            M2D new_cov = ContourView::addContourStat(*cont_views_[ll][id0], *cont_views_[ll][id1]).getManualCov();
+//              // case2: use relative translation preserving distribution
+//              M2D new_cov = ContourView::addContourStat(*cont_views_[ll][id0], *cont_views_[ll][id1]).getManualCov();
 //
-//            key(3) = std::sqrt(cc_perp.transpose() * new_cov * cc_perp);
+//              key(3) = std::sqrt(cc_perp.transpose() * new_cov * cc_perp);
 //
-//            // distribution of projection to cc line
-//            key(4) = std::sqrt(cc_line.transpose() * new_cov * cc_line);
+//              // distribution of projection to cc line
+//              key(4) = std::sqrt(cc_line.transpose() * new_cov * cc_line);
 //
-//            // the max eigen value of the first ellipse
-//            key(5) = std::sqrt(cont_views_[ll][id0]->eig_vals_(1));
-
-
-            // key dim = 11
-            V2D cc_line = cont_views_[ll][id0]->pos_mean_ - cont_views_[ll][id1]->pos_mean_;
-            key(0) = cc_line.norm();
-
-            // the max eigen value of the first ellipse
-            key(1) = std::sqrt(cont_views_[ll][id0]->eig_vals_(1));
-            key(2) = std::sqrt(cont_views_[ll][id1]->eig_vals_(1));
-
-            // the strip descriptors
-            for (int i = 0; i < 4; i++) {
-              key(3 + i * 2) = cont_views_[ll][id0]->strip_width_[i];
-              key(3 + i * 2 + 1) = cont_views_[ll][id1]->strip_width_[i];
-            }
-
-
-//            // key dim = 9
-//            V2D cc_line = cont_views_[ll][id0]->pos_mean_ - cont_views_[ll][id1]->pos_mean_;
-//            key(0) = cc_line.norm();
+//              // the max eigen value of the first ellipse
+//              key(5) = std::sqrt(cont_views_[ll][id0]->eig_vals_(1));
+//            } else if (RET_KEY_DIM == 11) {
+//              // key dim = 11
+//              V2D cc_line = cont_views_[ll][id0]->pos_mean_ - cont_views_[ll][id1]->pos_mean_;
+//              key(0) = cc_line.norm();
 //
-//            // the max eigen value of the first ellipse
-//            // the strip descriptors, area
-//            for (int i = 0; i < 4; i++) {
-//              key(1 + i * 2) = cont_views_[ll][id0]->strip_width_[i] * std::sqrt(cont_views_[ll][id0]->eig_vals_(1))/4;
-//              key(1 + i * 2 + 1) =
-//                  cont_views_[ll][id1]->strip_width_[i] * std::sqrt(cont_views_[ll][id1]->eig_vals_(1))/4;
+//              // the max eigen value of the first ellipse
+//              key(1) = std::sqrt(cont_views_[ll][id0]->eig_vals_(1));
+//              key(2) = std::sqrt(cont_views_[ll][id1]->eig_vals_(1));
+//
+//              // the strip descriptors
+//              for (int i = 0; i < 4; i++) {
+//                key(3 + i * 2) = cont_views_[ll][id0]->strip_width_[i];
+//                key(3 + i * 2 + 1) = cont_views_[ll][id1]->strip_width_[i];
+//              }
+//            } else if (RET_KEY_DIM == 9) {
+//              // key dim = 9
+//              V2D cc_line = cont_views_[ll][id0]->pos_mean_ - cont_views_[ll][id1]->pos_mean_;
+//              key(0) = cc_line.norm();
+//
+//              // the max eigen value of the first ellipse
+//              // the strip descriptors, area
+//              for (int i = 0; i < 4; i++) {
+//                key(1 + i * 2) =
+//                    cont_views_[ll][id0]->strip_width_[i] * std::sqrt(cont_views_[ll][id0]->eig_vals_(1)) / 4;
+//                key(1 + i * 2 + 1) =
+//                    cont_views_[ll][id1]->strip_width_[i] * std::sqrt(cont_views_[ll][id1]->eig_vals_(1)) / 4;
+//              }
 //            }
+//
+//          }
+//
+//
+//          layer_keys_[ll].emplace_back(key);
+//        }
+//      }
+//    }
 
+    /// case 2: new key making: from a pivot contour
+    const int piv_firsts = 6;
+    const int dist_firsts = 10;
+    for (int ll = 0; ll < cfg_.lv_grads_.size(); ll++) {
+      for (int i = 0; i < piv_firsts; i++) {
+        RetrievalKey key;
+        key.setZero();
+
+        BCI bci(i, ll);
+
+        if (cont_views_[ll].size() > i && cont_views_[ll][i]->cell_cnt_ > cfg_.cont_cnt_thres_ &&
+            cont_views_[ll][i]->cell_cnt_ > cfg_.cont_cnt_thres_) {
+
+          // TODO: make the key generation from one contour more distinctive
+          key(0) = std::sqrt(cont_views_[ll][i]->eig_vals_(1));  // max eigen value
+          key(1) = std::sqrt(cont_views_[ll][i]->eig_vals_(0));  // min eigen value
+          key(2) = (cont_views_[ll][i]->pos_mean_ - cont_views_[ll][i]->com_).norm();
+
+          // hash dists and angles of the neighbours around the anchor/pivot to bit keys
+          // hard coded
+          for (int bl = 0; bl < NUM_BIN_KEY_LAYER; bl++) {
+            int bit_offset = bl * BITS_PER_LAYER;
+            for (int j = 0; j < std::min(dist_firsts, (int) cont_views_[DIST_BIN_LAYERS[bl]].size()); j++) {
+              if (j != i) {
+                V2D vec_cc =
+                    cont_views_[DIST_BIN_LAYERS[bl]][j]->pos_mean_ - cont_views_[ll][i]->pos_mean_;
+                float tmp_dist = vec_cc.norm();
+
+                if (tmp_dist > (BITS_PER_LAYER - 1) * 1.01 + 5.43 - 1e-3 // the last bit of layer sector is always 0
+                    || tmp_dist <= 5.43)  // TODO: nonlinear mapping?
+                  continue;
+
+                float tmp_orie = std::atan2(vec_cc.y(), vec_cc.x());
+                int dist_idx = std::min(std::floor((tmp_dist - 5.43) / 1.01), BITS_PER_LAYER - 1.0) + bit_offset;
+                bci.dist_bin_.set(dist_idx, true);
+                bci.dist_bit_neighbors_[dist_idx].emplace_back(DIST_BIN_LAYERS[bl], j, tmp_dist, tmp_orie);
+              }
+            }
           }
 
-
-          layer_keys_[ll].emplace_back(key);
         }
+//        if(key.sum()!=0)
+        layer_key_bci_[ll].emplace_back(bci);  // even invalid keys are recorded.
+        layer_keys_[ll].emplace_back(key);  // even invalid keys are recorded.
       }
+    }
+
+    for (int ll = 0; ll < cfg_.lv_grads_.size(); ll++) {
+      DCHECK_EQ(layer_keys_[ll].size(), piv_firsts);
+      DCHECK_EQ(layer_key_bci_[ll].size(), piv_firsts);
     }
 
     // print top 2 features in each
@@ -399,7 +499,7 @@ public:
 
     // save statistics of this scan:
     std::string fpath = std::string(PJSRCDIR) + "/results/contours_orig-" + str_id_ + ".txt";
-    saveContours(fpath);
+    saveContours(fpath, cont_views_);
 
 //    cv::imwrite("cart_context-mask-" + std::to_string(3) + "-" + str_id_ + "rec.png", visualization);
 //    for (const auto &x: cont_views_) {
@@ -407,11 +507,81 @@ public:
 //    }
   }
 
+  // save accumulated contours to a file that is readable to the python script
+  void saveAccumulatedContours(int top_n) const {
+    std::vector<std::vector<std::shared_ptr<ContourView>>> new_cont_views;
+    new_cont_views.resize(cont_views_.size());
+    for (int ll = 0; ll < cfg_.lv_grads_.size(); ll++) {
+      for (int i = 0; i < std::min(top_n, (int) cont_views_[ll].size()); i++) {
+        if (i == 0)
+          new_cont_views[ll].emplace_back(std::make_shared<ContourView>(*cont_views_[ll][i]));
+        else {
+          new_cont_views[ll].emplace_back(std::make_shared<ContourView>(
+              ContourView::addContourStat(*new_cont_views[ll].back(), *cont_views_[ll][i])));
+        }
+      }
+    }
+    std::string fpath = std::string(PJSRCDIR) + "/results/contours_accu-" + str_id_ + ".txt";
+    saveContours(fpath, new_cont_views);
+
+  }
+
+  // experimental: show dists from one contour to several others
+  void expShowDists(int level, int pivot, int top_n) {
+    CHECK_LT(level, cfg_.lv_grads_.size());
+    CHECK_LT(pivot, cont_views_[level].size());
+    printf("Level %d, pivot No.%d distances:\n", level, pivot);
+    std::vector<std::pair<int, double>> dists;
+    for (int i = 0; i < std::min(top_n, (int) cont_views_[level].size()); i++)
+      if (i != pivot)
+        dists.emplace_back(i, (cont_views_[level][i]->pos_mean_ - cont_views_[level][pivot]->pos_mean_).norm());
+
+    std::sort(dists.begin(), dists.end(), [&](const std::pair<int, double> &a, const std::pair<int, double> &b) {
+      return a.second < b.second;
+    });
+    for (const auto &pr: dists) {
+      printf("%2d: %7.4f, ", pr.first, pr.second);
+    }
+    printf("\n");
+  }
+
+  // experimental: show dists from one contour to several others
+  void expShowBearing(int level, int pivot, int top_n) {
+    CHECK_LT(level, cfg_.lv_grads_.size());
+    CHECK_LT(pivot, cont_views_[level].size());
+    printf("Level %d, pivot No.%d orientations:\n", level, pivot);
+    std::vector<std::pair<int, double>> bearings;
+    bool first_set = false;
+    V2D vec0(0, 0);
+    for (int i = 0; i < std::min(top_n, (int) cont_views_[level].size()); i++) {
+      if (i != pivot) {
+        if (!first_set) {
+          bearings.emplace_back(i, 0);
+          first_set = true;
+          vec0 = (cont_views_[level][i]->pos_mean_ - cont_views_[level][pivot]->pos_mean_).normalized();
+        } else {
+          V2D vec1 = (cont_views_[level][i]->pos_mean_ - cont_views_[level][pivot]->pos_mean_).normalized();
+          double ang = std::atan2(vec0.x() * vec1.y() - vec0.y() * vec1.x(), vec0.dot(vec1));
+          bearings.emplace_back(i, ang);
+        }
+      }
+    }
+
+    std::sort(bearings.begin(), bearings.end(), [&](const std::pair<int, double> &a, const std::pair<int, double> &b) {
+      return a.second < b.second;
+    });
+    for (const auto &pr: bearings) {
+      printf("%2d: %7.4f, ", pr.first, pr.second);
+    }
+    printf("\n");
+  }
+
   void makeContours();
 
   // util functions
   // 1. save all contours' statistical data into a text file
-  void saveContours(const std::string &fpath) const;
+  static void
+  saveContours(const std::string &fpath, const std::vector<std::vector<std::shared_ptr<ContourView>>> &cont_views);
 
   // 2. save a layer of contours to image
   void saveContourImage(const std::string &fpath, int level) const;
@@ -436,6 +606,12 @@ public:
     return layer_keys_[level];
   }
 
+  std::vector<BCI> getBCI(int level) const {
+    DCHECK_GE(level, 0);
+    DCHECK_GT(cont_views_.size(), level);
+    return layer_key_bci_[level];
+  }
+
   inline std::string getStrID() const {
     return str_id_;
   }
@@ -447,149 +623,94 @@ public:
   // TODO: check if contours in two scans can be accepted as from the same heatmap, and return the transform
   // TODO: when retrieval key contains the combination, we should only look into that combination.
   // T_tgt = T_delta * T_src
-  static std::pair<Eigen::Isometry2d, bool> calcScanCorresp(const ContourManager &src, const ContourManager &tgt) {
+  static std::pair<Eigen::Isometry2d, bool> calcScanCorresp(const ContourManager &src, const ContourManager &tgt);
+
+  // T_tgt = T_delta * T_src
+  ///
+  /// \param src
+  /// \param tgt
+  /// \param levels
+  /// \param ids_src The indices of the matched contours at \param{levels}, one on one correspondence with ids_tgt
+  /// \param ids_tgt
+  /// \param sim_idx if return true, this contains the index of ids_{src|tgt} survived pairwise similarity check. Values
+  ///     taken from [0, ids_tgt.size()).
+  /// \return
+  static std::pair<Eigen::Isometry2d, bool>
+  calcScanCorresp(const ContourManager &src, const ContourManager &tgt, const std::vector<ConstellationPair> &cstl,
+                  std::vector<int> &sim_idx) {
+    // cross level consensus (CLC)
+    // The rough constellation should have been established.
     DCHECK_EQ(src.cont_views_.size(), tgt.cont_views_.size());
-    printf("calcScanCorresp(): \n");
-
-    // configs
-    int num_tgt_top = 5;
-    int num_src_top = 4;
-
-    int num_tgt_ser = 10; // when initial result is positive, we progressively search more correspondence pairs
-    int num_src_ser = 10;
-    std::vector<std::pair<int, int>> src_q_comb = {{0, 1},
-                                                   {0, 2},
-                                                   {0, 3},
-                                                   {1, 2},
-                                                   {1, 3},
-                                                   {2, 3}};  // in accordance with num_src_top
 
     std::pair<Eigen::Isometry2d, bool> ret{};
-    int num_levels = (int) src.cont_views_.size() - 2;
 
-    // TODO: check FP rate for retrieval tasks
+    sim_idx.clear();
+    int num_sim = 0;
+    // 1. check individual sim
+    for (int i = 0; i < cstl.size(); i++) {
+      if (ContourView::checkSim(*src.cont_views_[cstl[i].level][cstl[i].seq_src],
+                                *tgt.cont_views_[cstl[i].level][cstl[i].seq_tgt]))
+        sim_idx.push_back(i);
+    }
+    if (sim_idx.size() < 4)
+      return ret;  // TODO: use cross level consensus to find more possible matched pairs
 
-    for (int l = 0; l < num_levels; l++) {
-      if (src.cont_views_[l].size() < num_src_top || tgt.cont_views_[l].size() < 3)
-        continue;
-      if (ret.second)
-        break;
-      printf("Matching level: %d\n", l);
-      for (const auto &comb: src_q_comb) {
-        for (int i = 0; i < std::min((int) tgt.cont_views_[l].size(), num_tgt_top); i++)
-          for (int j = 0; j < std::min((int) tgt.cont_views_[l].size(), num_tgt_top); j++) {
-            if (j == i)
-              continue;
-            // Contour Correspondence Proposal: comb.first=i, comb.second=j
-            const auto sc1 = src.cont_views_[l][comb.first], sc2 = src.cont_views_[l][comb.second],
-                tc1 = tgt.cont_views_[l][i], tc2 = tgt.cont_views_[l][j];
-
-//            printf("-- Check src: %d, %d, tgt: %d, %d\n", comb.first, comb.second, i, j);
-
-            // 1. test if the proposal fits in terms of individual contours
-            bool is_pairs_sim = ContourView::checkSim(*sc1, *tc1) && ContourView::checkSim(*sc2, *tc2);
-            if (!is_pairs_sim) {
-              continue;
-            }
-
-            // 2. check geometry center distance
-            double dist_src = (sc1->pos_mean_ - sc2->pos_mean_).norm();
-            double dist_tgt = (tc1->pos_mean_ - tc2->pos_mean_).norm();
-            if (std::max(dist_tgt, dist_src) > 5.0 && diff_delt(dist_src, dist_tgt, 5.0))
-              continue;
-
-            // 3. check contour orientation
-            Eigen::Vector2d cent_s = (sc1->pos_mean_ - sc2->pos_mean_).normalized();
-            Eigen::Vector2d cent_t = (tc1->pos_mean_ - tc2->pos_mean_).normalized();
-            if (sc1->ecc_feat_ && tc1->ecc_feat_) {
-              double theta_s = std::acos(cent_s.transpose() * sc1->eig_vecs_.col(1));   // acos: [0,pi)
-              double theta_t = std::acos(cent_t.transpose() * tc1->eig_vecs_.col(1));
-              if (diff_delt(theta_s, theta_t, M_PI / 12) && diff_delt(M_PI - theta_s, theta_t, M_PI / 12))
-                continue;
-            }
-            if (sc2->ecc_feat_ && tc2->ecc_feat_) {
-              double theta_s = std::acos(cent_s.transpose() * sc2->eig_vecs_.col(1));   // acos: [0,pi)
-              double theta_t = std::acos(cent_t.transpose() * tc2->eig_vecs_.col(1));
-              if (diff_delt(theta_s, theta_t, M_PI / 6) && diff_delt(M_PI - theta_s, theta_t, M_PI / 6))
-                continue;
-            }
-
-            // 4. PROSAC
-            // 4.1 get the rough transform to facilitate the similarity check (relatively large acceptance range)
-            // can come from a naive 2 point transform estimation or a gmm2gmm
-            Eigen::Matrix3d T_delta = estimateTF(sc1->pos_mean_, sc2->pos_mean_, tc1->pos_mean_,
-                                                 tc2->pos_mean_).matrix(); // naive 2 point estimation
-
-            // for pointset transform estimation
-            Eigen::Matrix<double, 2, Eigen::Dynamic> pointset1; // src
-            Eigen::Matrix<double, 2, Eigen::Dynamic> pointset2; // tgt
-            pointset1.resize(2, 2);
-            pointset2.resize(2, 2);
-            pointset1.col(0) = sc1->pos_mean_;
-            pointset1.col(1) = sc2->pos_mean_;
-            pointset2.col(0) = tc1->pos_mean_;
-            pointset2.col(1) = tc2->pos_mean_;
-
-            // 4.2 create adjacency matrix (binary weight bipartite graph) or calculate on the go?
-            std::vector<std::pair<int, int>> match_list = {{comb.first,  i},
-                                                           {comb.second, j}};
-            std::set<int> used_src{comb.first, comb.second}, used_tgt{i, j};
-            // 4.3 check if new pairs exit
-            double tf_dist_max = 5.0;
-            for (int ii = 0; ii < std::min((int) src.cont_views_[l].size(), num_src_ser); ii++) {
-              if (used_src.find(ii) != used_src.end())
-                continue;
-              for (int jj = 0; jj < std::min((int) tgt.cont_views_[l].size(), num_tgt_ser); jj++) {
-                if (used_tgt.find(jj) != used_tgt.end())
-                  continue;
-                V2D pos_mean_src_tf = T_delta.block<2, 2>(0, 0) * src.cont_views_[l][ii]->pos_mean_
-                                      + T_delta.block<2, 1>(0, 2);
-                if ((pos_mean_src_tf - tgt.cont_views_[l][jj]->pos_mean_).norm() > tf_dist_max ||
-                    !ContourView::checkSim(*src.cont_views_[l][ii], *tgt.cont_views_[l][jj])
-                    )
-                  continue;
-                // handle candidate pairs
-                // TODO: check consensus before adding:
-                match_list.emplace_back(ii, jj);
-                used_src.insert(ii);  // greedy
-                used_tgt.insert(jj);
-
-                // TODO: update transform
-                // pure point method: umeyama
-
-                pointset1.conservativeResize(Eigen::NoChange_t(), match_list.size());
-                pointset2.conservativeResize(Eigen::NoChange_t(), match_list.size());
-                pointset1.rightCols(1) = src.cont_views_[l][ii]->pos_mean_;
-                pointset2.rightCols(1) = tgt.cont_views_[l][jj]->pos_mean_;
-                T_delta = Eigen::umeyama(pointset1, pointset2, false);  // also need to check consensus
-
-              }
-              // TODO: termination criteria
-            }
-
-
-            // TODO: metric results, filter out some outlier
-            if (match_list.size() > 4) {
-              printf("Found matched pairs in level %d:\n", l);
-              for (const auto &pr: match_list) {
-                printf("\tsrc:tgt  %d: %d\n", pr.first, pr.second);
-              }
-              std::cout << "Transform matrix:\n" << T_delta << std::endl;
-              // TODO: move ret to later
-              ret.second = true;
-              ret.first.setIdentity();
-              ret.first.rotate(std::atan2(T_delta(1, 0), T_delta(0, 0)));
-              ret.first.pretranslate(T_delta.block<2, 1>(0, 2));
-            }
-          }
+    // 2. check orientation
+    // 2.1 get major axis direction
+    V2D shaft_src(0, 0), shaft_tgt(0, 0);
+    for (int i = 1; i < std::min((int) sim_idx.size(), 10); i++) {
+      for (int j = 0; j < i; j++) {
+        V2D curr_shaft = src.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_src]->pos_mean_ -
+                         src.cont_views_[cstl[sim_idx[j]].level][cstl[sim_idx[j]].seq_src]->pos_mean_;
+        if (curr_shaft.norm() > shaft_src.norm()) {
+          shaft_src = curr_shaft.normalized();
+          shaft_tgt = (tgt.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_tgt]->pos_mean_ -
+                       tgt.cont_views_[cstl[sim_idx[j]].level][cstl[sim_idx[j]].seq_tgt]->pos_mean_).normalized();
+        }
       }
+    }
+    // 2.2 if both src and tgt contour are orientational salient but the orientations largely differ, remove the pair
+    num_sim = sim_idx.size();
+    for (int i = 0; i < num_sim;) {
+      const auto &sc1 = src.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_src],
+          &tc1 = tgt.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_tgt];
+      if (sc1->ecc_feat_ && tc1->ecc_feat_) {
+        double theta_s = std::acos(shaft_src.transpose() * sc1->eig_vecs_.col(1));   // acos: [0,pi)
+        double theta_t = std::acos(shaft_tgt.transpose() * tc1->eig_vecs_.col(1));
+        if (diff_delt(theta_s, theta_t, M_PI / 6) && diff_delt(M_PI - theta_s, theta_t, M_PI / 6)) {
+          std::swap(sim_idx[i], sim_idx[num_sim - 1]);
+          num_sim--;
+          continue;
+        }
+      }
+      i++;
+    }
+    sim_idx.resize(num_sim);
+    if (sim_idx.size() < 4)
+      return ret;  // TODO: use cross level consensus to find more possible matched pairs
 
-      // TODO: cross level consensus
-
-      // TODO: full metric estimation
-
+    // 3. estimate transform using the data from current level
+    Eigen::Matrix<double, 2, Eigen::Dynamic> pointset1; // src
+    Eigen::Matrix<double, 2, Eigen::Dynamic> pointset2; // tgt
+    pointset1.resize(2, sim_idx.size());
+    pointset2.resize(2, sim_idx.size());
+    for (int i = 0; i < sim_idx.size(); i++) {
+      pointset1.col(i) = src.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_src]->pos_mean_;
+      pointset2.col(i) = tgt.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_tgt]->pos_mean_;
     }
 
+    Eigen::Matrix3d T_delta = Eigen::umeyama(pointset1, pointset2, false);
+
+    printf("Found matched pairs:\n");
+    for (int i: sim_idx) {
+      printf("\tlev %d, src:tgt  %d: %d\n", cstl[i].level, cstl[i].seq_src, cstl[i].seq_tgt);
+    }
+    std::cout << "Transform matrix:\n" << T_delta << std::endl;
+
+    ret.second = true;
+    ret.first.setIdentity();
+    ret.first.rotate(std::atan2(T_delta(1, 0), T_delta(0, 0)));
+    ret.first.pretranslate(T_delta.block<2, 1>(0, 2));
     return ret;
   }
 

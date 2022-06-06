@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from matplotlib import cm
 from matplotlib.patches import Ellipse
+import matplotlib.lines as lines
 import matplotlib.transforms as transforms
 
 
@@ -35,6 +36,18 @@ def confidence_ellipse_fromcov_2d(cov_xy, mean_xy, ax, n_std=3.0, facecolor='non
 
     ellipse.set_transform(transf + ax.transData)
     return ax.add_patch(ellipse)
+
+
+def main_axis_from_cov_2d(cov_xy, mean_xy, ax, color='black', **kwargs):
+    cov = np.array(cov_xy)
+    if cov[0, 0] * cov[1, 1] == 0:
+        return
+    eig_val, eig_vec = np.linalg.eigh(cov)  # default using lower triangle, eigval in ascending order
+    end_xy = mean_xy + eig_vec[:, 1] * np.sqrt(eig_val[1])
+
+    line = lines.Line2D([mean_xy[0], end_xy[0]], [mean_xy[1], end_xy[1]],
+                        lw=1, color=color, axes=ax)
+    ax.add_line(line)
 
 
 def read_data_from_file(fpath):
@@ -91,8 +104,11 @@ def plot_contours(raw_data=None, levels=None, legends=()):
     cmap = mpl.cm.get_cmap('jet')
     used_colors = []
 
+    max_xy = [0, 0]
+
     for i in range(len(raw_data)):
         data_color = cmap((i + 0.5) / len(raw_data))
+        # print(data_color)
         used_colors.append(data_color)
         level_beg = 0
         last_level = -1
@@ -109,17 +125,38 @@ def plot_contours(raw_data=None, levels=None, legends=()):
             V = raw_data[i][j, 10:14].reshape((2, 2,)).T
             cov_xy = V @ J @ V.T
 
-            confidence_ellipse_fromcov_2d(cov_xy, mean_xy, axs[level_map[raw_level]], 2.0, edgecolor=data_color,
-                                          linestyle='--')
+            if i == 0:  # manual transform
+                m_rot = np.array([[0, -1], [1, 0]])
+                m_trans = np.array([[100], [0]])
+                mean_xy = m_rot @ np.expand_dims(mean_xy, axis=1) + m_trans
+                mean_xy = np.squeeze(mean_xy)
+                cov_xy = m_rot @ cov_xy @ m_rot.T
+
+            selected_idx = [i for i in range(10)]
+            # selected_idx = [1, 3, 5, 7]
+            # selected_idx = [2, 4, 6, 8]
+
+            max_xy[0] = max_xy[0] if max_xy[0] > mean_xy[0] else mean_xy[0]
+            max_xy[1] = max_xy[1] if max_xy[1] > mean_xy[1] else mean_xy[1]
+
+            if j - level_beg in selected_idx:
+                confidence_ellipse_fromcov_2d(cov_xy, mean_xy, axs[level_map[raw_level]], 2.0, edgecolor=data_color,
+                                              linestyle='--')
+                # main_axis_from_cov_2d(cov_xy, mean_xy, axs[level_map[raw_level]], data_color)
             # 0. text: ranking in all contours of the scan
             # axs[level_map[raw_level]].text(mean_xy[0], mean_xy[1], str(j), color=data_color, fontsize=6)
-            # 1. text: the cell count ranking place of the data
-            if j - level_beg < 9:
-                axs[level_map[raw_level]].text(mean_xy[0], mean_xy[1], str(j - level_beg), color=data_color, fontsize=6)
-            # 2. text: the area
-            # axs[level_map[raw_level]].text(mean_xy[0], mean_xy[1], str(raw_data[i][j,1]), color=data_color, fontsize=6)
 
-    border = [0, 100, 0, 100]
+            if j - level_beg in selected_idx:
+                # 1. text: the cell count ranking place of the data
+                axs[level_map[raw_level]].text(mean_xy[0], mean_xy[1], str(j - level_beg), color=data_color, fontsize=6)
+
+                # 2. text: the cellcount i.e. [1]
+                # axs[level_map[raw_level]].text(mean_xy[0], mean_xy[1], str(raw_data[i][j, 1]), color=data_color,
+                #                                fontsize=6)
+
+    # border = [0, 100, 0, 100]
+    # border = [0, 150, 0, 150]
+    border = [0, max_xy[0] + 10, 0, max_xy[1] + 10]
     for i in range(len(levels)):
         axs[i].set_title('Level %d' % levels[i])
         axs[i].set_aspect(aspect=1)
@@ -133,7 +170,10 @@ def plot_contours(raw_data=None, levels=None, legends=()):
     axs[-1].legend(lines, legends)
     # axs[-1].legend()
 
-    plt.savefig('../results/cont0.svg', format='svg', dpi=600, bbox_inches='tight', pad_inches=0)
+    img_name = "".join([i for i in "-".join(data_names) if i.isalnum() or i in "-_."])
+
+    plt.savefig('../results/ellipse_img/ellipse_%s.svg' % img_name, format='svg', dpi=600, bbox_inches='tight',
+                pad_inches=0)
 
     plt.show()
 
@@ -158,9 +198,18 @@ if __name__ == "__main__":
     # plot_contours([dat1, dat4], [0, 1, 2, 3, 4, 5], data_names)
     # # plot_contours([dat1, dat2], [1, 2, 3, 4], data_names)
 
-    f_new = "../results/contours_orig-0000000034.txt"
-    f_old = "../results/contours_orig-0000002437.txt"
-    data_names = ("t=old", "t=new")
+    # read data saved from bin
+    # f_new = "../results/contours_orig-0000000034.txt"
+    # f_old = "../results/contours_orig-0000002437.txt"
+    # f_new = "../results/contours_orig-0000000119.txt"
+    # f_old = "../results/contours_orig-0000002511.txt"
+    f_new = "../results/contours_orig-0000001561.txt"
+    f_old = "../results/contours_orig-0000002576.txt"
+
+    # f_new = "../results/contours_accu-0000000119.txt"
+    # f_old = "../results/contours_accu-0000002511.txt"
+
+    data_names = ("t=1561", "t=2576")
     data1 = read_data_from_file(f_new)
     data2 = read_data_from_file(f_old)
-    plot_contours([data1, data2], [1, 2, 3, 4], data_names)
+    plot_contours([data1, data2], [0, 1, 2, 3, 4, 5], data_names)

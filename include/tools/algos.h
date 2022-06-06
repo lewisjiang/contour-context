@@ -38,4 +38,9 @@ inline Eigen::Isometry2d estimateTF(const Eigen::Vector2d &s1, const Eigen::Vect
   return res; // T_{delta}
 }
 
+template<typename T>
+inline void clampAng(T &ang) {
+  ang = ang - std::floor((ang + M_PI) / (2 * M_PI)) * 2 * M_PI;
+}
+
 #endif //CONT2_ALGOS_H

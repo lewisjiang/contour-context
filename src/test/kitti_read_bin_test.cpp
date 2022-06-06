@@ -116,8 +116,9 @@ int main(int argc, char **argv) {
 //  }
 
   // analysis data
-  int idx_old = 34;
-  int idx_new = 2437;
+//  int idx_old = 34, idx_new = 2437;
+//  int idx_old = 119, idx_new = 2511;
+  int idx_old = 1561, idx_new = 2576;
   std::string s_old, s_new;
 
   pcl::PointCloud<pcl::PointXYZ>::ConstPtr out_ptr_old = reader.getLidarPointCloud<pcl::PointXYZ>(idx_old, s_old);
@@ -125,6 +126,10 @@ int main(int argc, char **argv) {
 
   ContourManagerConfig config;
   config.lv_grads_ = {1.5, 2, 2.5, 3, 3.5, 4};
+//  config.reso_row_ = 1.0f;
+//  config.reso_col_ = 1.0f;
+//  config.n_row_ = 150;
+//  config.n_col_ = 150;
 
   std::shared_ptr<ContourManager> cmng_ptr_old(new ContourManager(config, idx_old));
   cmng_ptr_old->makeBEV<pcl::PointXYZ>(out_ptr_old, s_old);
@@ -135,23 +140,50 @@ int main(int argc, char **argv) {
 
   printf("Analysing %s-%s\n", cmng_ptr_old->getStrID().c_str(), cmng_ptr_new->getStrID().c_str());
 
+  // test 1. manual compare
   // find the nearest keys in each level:
   printf("Keys:\n");
   for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
+    printf("\nPermu Level %d\n", ll);
     auto keys1 = cmng_ptr_old->getRetrievalKey(ll);
     auto keys2 = cmng_ptr_new->getRetrievalKey(ll);
+    auto bcis1 = cmng_ptr_old->getBCI(ll);
+    auto bcis2 = cmng_ptr_new->getBCI(ll);
+
     RetrievalKey final_k1, final_k2;
+    int f1 = 0, f2 = 0;
     KeyFloatType min_diff = 1e6;
-    for (auto k1: keys1) {
-      for (auto k2: keys2) {
+    for (int i1 = 0; i1 < keys1.size(); i1++) {
+      for (int i2 = 0; i2 < keys2.size(); i2++) {
+        const auto &k1 = keys1[i1];
+        const auto &k2 = keys2[i2];
         KeyFloatType tmp_dist = (k1 - k2).squaredNorm();
         if (tmp_dist < min_diff) {
           min_diff = tmp_dist;
           final_k1 = k1;
           final_k2 = k2;
+          f1 = i1;
+          f2 = i2;
         }
       }
     }
+    printf("BF compare key finished\n");
+
+    std::vector<ConstellationPair> constell_pairs;
+    bool is_constell_sim = BCI::checkConstellSim(bcis1[f1], bcis2[f2], constell_pairs);
+
+    if (is_constell_sim) {
+      printf("Found constell\n");
+
+      std::vector<int> sim_idx;
+      std::pair<Eigen::Isometry2d, bool> mat_res = ContourManager::calcScanCorresp(*cmng_ptr_old, *cmng_ptr_new,
+                                                                                   constell_pairs, sim_idx);
+      std::cout << mat_res.second << std::endl;
+      std::cout << mat_res.first.matrix() << std::endl;
+    } else {
+      printf("No constellation found\n");
+    }
+
     printf("Level %d, minimal key diff sq = %f\nkey1bit: ", ll, min_diff);
     for (int key_bit = 0; key_bit < RetrievalKey::SizeAtCompileTime; key_bit++)
       printf("%8.4f\t", final_k1[key_bit]);
@@ -161,11 +193,31 @@ int main(int argc, char **argv) {
     printf("\n");
 
   }
-
   std::string f_name =
       PROJ_DIR + "/results/pair_comp_img/pair_" + cmng_ptr_old->getStrID() + "-" + cmng_ptr_new->getStrID() +
       ".png";
   ContourManager::saveMatchedPairImg(f_name, *cmng_ptr_old, *cmng_ptr_new);
+
+//  // test 2. save slice accumulated from top N contours
+////  for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
+////
+////  }
+////  cmng_ptr_old->saveAccumulatedContours(10);
+////  cmng_ptr_new->saveAccumulatedContours(10);
+//
+//  // test 3. show distance description
+////  cmng_ptr_old->expShowDists(1, 1, 10);
+////  cmng_ptr_new->expShowDists(1, 2, 10);
+////
+////  cmng_ptr_old->expShowBearing(1, 1, 10);
+////  cmng_ptr_new->expShowBearing(1, 2, 10);
+//
+//  cmng_ptr_old->expShowDists(3, 3, 10);
+//  cmng_ptr_new->expShowDists(3, 3, 10);
+//
+//  cmng_ptr_old->expShowBearing(3, 3, 10);
+//  cmng_ptr_new->expShowBearing(3, 3, 10);
+
 
   return 0;
 }

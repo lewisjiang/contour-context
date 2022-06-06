@@ -100,6 +100,8 @@ public:
     DCHECK_GE(cfg_.half_strip_num_, 2);
   };
 
+  ContourView(const ContourView &obj) = default;
+
   // TODO: call this function everytime encounters a pixel belonging to this connected component
   void runningStats(int curr_row, int curr_col, float height) {
     DCHECK_GE(curr_row, -0.5f);

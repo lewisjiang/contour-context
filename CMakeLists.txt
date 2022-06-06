@@ -39,7 +39,7 @@ find_package(PCL REQUIRED)
 
 find_package(OpenCV 4 REQUIRED)
 #find_package(OpenCV REQUIRED)
-#find_package(OpenCV REQUIRED PATHS /home/lewis/.local/install_dir/opencv3.4.6/share NO_DEFAULT_PATH)
+#find_package(OpenCV 3 REQUIRED PATHS /home/lewis/.local/install_dir/opencv3.4.6/share NO_DEFAULT_PATH)
 
 find_package(Ceres REQUIRED)
 
