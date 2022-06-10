@@ -161,7 +161,7 @@ class KNNResultSet
     using IndexType    = _IndexType;
     using CountType    = _CountType;
 
-   private:
+  protected:
     IndexType*    indices;
     DistanceType* dists;
     CountType     capacity;

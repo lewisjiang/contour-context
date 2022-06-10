@@ -119,6 +119,7 @@ int main(int argc, char **argv) {
 //  int idx_old = 34, idx_new = 2437;
 //  int idx_old = 119, idx_new = 2511;
   int idx_old = 1561, idx_new = 2576;
+//  int idx_old = 80, idx_new = 2481; // the return to the first turning
   std::string s_old, s_new;
 
   pcl::PointCloud<pcl::PointXYZ>::ConstPtr out_ptr_old = reader.getLidarPointCloud<pcl::PointXYZ>(idx_old, s_old);
@@ -158,6 +159,27 @@ int main(int argc, char **argv) {
         const auto &k1 = keys1[i1];
         const auto &k2 = keys2[i2];
         KeyFloatType tmp_dist = (k1 - k2).squaredNorm();
+
+        std::vector<ConstellationPair> tmp_pairs;
+        int status_code = BCI::checkConstellSim(bcis1[i1], bcis2[i2], tmp_pairs);
+
+        std::vector<int> tmp_sim_idx;
+        std::pair<Eigen::Isometry2d, int> mat_res;
+
+        if (status_code > 10) {
+          printf("---\n");
+          mat_res = ContourManager::calcScanCorresp(*cmng_ptr_old, *cmng_ptr_new, tmp_pairs, tmp_sim_idx, 5);
+          printf("Level %d, key diff sq = %f\nkey1: %2dth: ", ll, tmp_dist, i1);
+          for (int key_bit = 0; key_bit < RetrievalKey::SizeAtCompileTime; key_bit++)
+            printf("%8.4f\t", k1[key_bit]);
+          printf("\nkey2: %2dth: ", i2);
+          for (int key_bit = 0; key_bit < RetrievalKey::SizeAtCompileTime; key_bit++)
+            printf("%8.4f\t", k2[key_bit]);
+          printf("\n");
+          printf("---\n");
+        }
+
+        printf("BF key diff: %d %d %7.4f, status: %2d, %d\n", i1, i2, tmp_dist, status_code, int(mat_res.second));
         if (tmp_dist < min_diff) {
           min_diff = tmp_dist;
           final_k1 = k1;
@@ -170,27 +192,27 @@ int main(int argc, char **argv) {
     printf("BF compare key finished\n");
 
     std::vector<ConstellationPair> constell_pairs;
-    bool is_constell_sim = BCI::checkConstellSim(bcis1[f1], bcis2[f2], constell_pairs);
+    bool is_constell_sim = BCI::checkConstellSim(bcis1[f1], bcis2[f2], constell_pairs) > 0;
 
     if (is_constell_sim) {
       printf("Found constell\n");
 
       std::vector<int> sim_idx;
-      std::pair<Eigen::Isometry2d, bool> mat_res = ContourManager::calcScanCorresp(*cmng_ptr_old, *cmng_ptr_new,
-                                                                                   constell_pairs, sim_idx);
-      std::cout << mat_res.second << std::endl;
-      std::cout << mat_res.first.matrix() << std::endl;
+      std::pair<Eigen::Isometry2d, int> mat_res = ContourManager::calcScanCorresp(*cmng_ptr_old, *cmng_ptr_new,
+                                                                                  constell_pairs, sim_idx, 5);
+//      std::cout << mat_res.second << std::endl;
+//      std::cout << mat_res.first.matrix() << std::endl;
     } else {
       printf("No constellation found\n");
     }
 
-    printf("Level %d, minimal key diff sq = %f\nkey1bit: ", ll, min_diff);
-    for (int key_bit = 0; key_bit < RetrievalKey::SizeAtCompileTime; key_bit++)
-      printf("%8.4f\t", final_k1[key_bit]);
-    printf("\nkey2bit: ");
-    for (int key_bit = 0; key_bit < RetrievalKey::SizeAtCompileTime; key_bit++)
-      printf("%8.4f\t", final_k2[key_bit]);
-    printf("\n");
+//    printf("Level %d, minimal key diff sq = %f\nkey1: %2dth: ", ll, min_diff, f1);
+//    for (int key_bit = 0; key_bit < RetrievalKey::SizeAtCompileTime; key_bit++)
+//      printf("%8.4f\t", final_k1[key_bit]);
+//    printf("\nkey2: %2dth: ", f2);
+//    for (int key_bit = 0; key_bit < RetrievalKey::SizeAtCompileTime; key_bit++)
+//      printf("%8.4f\t", final_k2[key_bit]);
+//    printf("\n");
 
   }
   std::string f_name =

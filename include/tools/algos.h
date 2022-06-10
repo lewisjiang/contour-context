@@ -43,4 +43,10 @@ inline void clampAng(T &ang) {
   ang = ang - std::floor((ang + M_PI) / (2 * M_PI)) * 2 * M_PI;
 }
 
+template<typename T>
+inline T gaussPDF(const T &x, const T &mean, const T &sd) {
+  return std::exp(-0.5 * ((x - mean) / sd) * ((x - mean) / sd)) / std::sqrt(2 * M_PI * sd * sd);
+}
+
+
 #endif //CONT2_ALGOS_H

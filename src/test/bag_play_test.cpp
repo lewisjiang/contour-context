@@ -29,11 +29,11 @@ class RosBagPlayLoopTest {
   ContourDB contour_db;
   std::vector<Eigen::Isometry3d> gt_poses;
 
-  Cont2_ROS_IO<pcl::PointXYZ> ros_io;
+  Cont2_ROS_IO <pcl::PointXYZ> ros_io;
 
   tf2_ros::Buffer tfBuffer;
   tf2_ros::TransformListener tfListener;
-  int lc_cnt{}, seq_cnt{};
+  int lc_cnt{}, seq_cnt{}, valid_lc_cnt{};
 
   bool time_beg_set = false;
   ros::Time time_beg;
@@ -42,7 +42,7 @@ class RosBagPlayLoopTest {
 public:
   explicit RosBagPlayLoopTest(ros::NodeHandle &nh_) : nh(nh_), ros_io(0, "/velodyne_points", nh_),
                                                       tfListener(tfBuffer),
-                                                      contour_db(ContourDBConfig(), std::vector<int>({1, 2, 3, 4})) {
+                                                      contour_db(ContourDBConfig(), std::vector<int>({1, 2, 3})) {
     path_msg.header.frame_id = "world";
     pub_path = nh_.advertise<nav_msgs::Path>("/gt_path", 10000);
     pub_lc_connections = nh_.advertise<visualization_msgs::MarkerArray>("/lc_connect", 10000);
@@ -148,37 +148,63 @@ public:
 //    }
 
     // case 2: use tree
-    // 2.1 query
+//    // 2.1.1 query case 1:
+//    std::vector<std::shared_ptr<ContourManager>> candidate_loop;
+//    std::vector<KeyFloatType> dists_sq;
+//    TicToc clk_kdsear;
+//    contour_db.queryCandidatesKNN(*cmng_ptr, candidate_loop, dists_sq);
+//    printf("%lu Candidates in %7.5fs: ", candidate_loop.size(), clk_kdsear.toc());
+//    if (!candidate_loop.empty())
+//      printf(" dist sq from %7.4f to %7.4f\n", dists_sq.front(), dists_sq.back());
+//    else
+//      printf("\n");
+//
+//    for (int j = 0; j < candidate_loop.size(); j++) {
+//      printf("Matching new: %d with old: %d:", cnt, candidate_loop[j]->getIntID());
+//      TicToc clk_match_once;
+//      auto lc_detect_res = ContourManager::calcScanCorresp(*cmng_ptr, *candidate_loop[j]);  // (src, tgt)
+//      printf("Match once time: %f\n", clk_match_once.toc());
+//      if (lc_detect_res.second) {
+//        new_lc_pairs.emplace_back(cnt, candidate_loop[j]->getIntID());
+//        // write file
+//        std::string f_name =
+//            PROJ_DIR + "/results/match_comp_img/lc_" + cmng_ptr->getStrID() + "-" + candidate_loop[j]->getStrID() +
+//            ".png";
+//        ContourManager::saveMatchedPairImg(f_name, *cmng_ptr, *candidate_loop[j]);
+//        printf("Image saved: %s-%s\n", cmng_ptr->getStrID().c_str(), candidate_loop[j]->getStrID().c_str());
+////        printf("Key squared diffs at different levels: ");
+////        for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
+////          RetrievalKey diff = cmng_ptr->getRetrievalKey(ll) - candidate_loop[j]->getRetrievalKey(ll);
+////          printf("%7.2f ", diff.squaredNorm());
+////        }
+//      }
+//    }
+
+    // 2.1.2 query case 2:
     std::vector<std::shared_ptr<ContourManager>> candidate_loop;
     std::vector<KeyFloatType> dists_sq;
     TicToc clk_kdsear;
-    contour_db.queryCandidates(*cmng_ptr, candidate_loop, dists_sq);
-    printf("%lu Candidates in %7.5fs: ", candidate_loop.size(), clk_kdsear.toc());
-    if (!candidate_loop.empty())
-      printf(" dist sq from %7.4f to %7.4f\n", dists_sq.front(), dists_sq.back());
-    else
-      printf("\n");
+    contour_db.queryCandidatesRange(*cmng_ptr, candidate_loop, dists_sq);
+    printf("%lu Candidates in %7.5fs: \n", candidate_loop.size(), clk_kdsear.toc());
 
     for (int j = 0; j < candidate_loop.size(); j++) {
       printf("Matching new: %d with old: %d:", cnt, candidate_loop[j]->getIntID());
-      TicToc clk_match_once;
-      auto lc_detect_res = ContourManager::calcScanCorresp(*cmng_ptr, *candidate_loop[j]);  // (src, tgt)
-      printf("Match once time: %f\n", clk_match_once.toc());
-      if (lc_detect_res.second) {
-        new_lc_pairs.emplace_back(cnt, candidate_loop[j]->getIntID());
-        // write file
-        std::string f_name =
-            PROJ_DIR + "/results/match_comp_img/lc_" + cmng_ptr->getStrID() + "-" + candidate_loop[j]->getStrID() +
-            ".png";
-        ContourManager::saveMatchedPairImg(f_name, *cmng_ptr, *candidate_loop[j]);
-        printf("Image saved: %s-%s\n", cmng_ptr->getStrID().c_str(), candidate_loop[j]->getStrID().c_str());
-//        printf("Key squared diffs at different levels: ");
-//        for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
-//          RetrievalKey diff = cmng_ptr->getRetrievalKey(ll) - candidate_loop[j]->getRetrievalKey(ll);
-//          printf("%7.2f ", diff.squaredNorm());
-//        }
+      new_lc_pairs.emplace_back(cnt, candidate_loop[j]->getIntID());
+
+      // record "valid" loop closure
+      if ((gt_poses[new_lc_pairs.back().first].translation() -
+           gt_poses[new_lc_pairs.back().second].translation()).norm() < 4.0) {
+        valid_lc_cnt++;
       }
+
+      // write file
+      std::string f_name =
+          PROJ_DIR + "/results/match_comp_img/lc_" + cmng_ptr->getStrID() + "-" + candidate_loop[j]->getStrID() +
+          ".png";
+      ContourManager::saveMatchedPairImg(f_name, *cmng_ptr, *candidate_loop[j]);
+      printf("Image saved: %s-%s\n", cmng_ptr->getStrID().c_str(), candidate_loop[j]->getStrID().c_str());
     }
+
     // 2.2 add new
     contour_db.addScan(cmng_ptr, time.toSec());
     // 2.3 balance
@@ -190,8 +216,9 @@ public:
     publishLCConnections(new_lc_pairs, time);
     cnt++;
 
-  }
+    printf("Accumulated valid lc: %d\n", valid_lc_cnt);
 
+  }
 
 
   void publishPath(ros::Time time, const geometry_msgs::TransformStamped &tf_gt_last) {
@@ -220,6 +247,8 @@ public:
       marker.action = visualization_msgs::Marker::ADD;
       marker.type = visualization_msgs::Marker::LINE_STRIP;
 
+      double len = (gt_poses[pr.first].translation() - gt_poses[pr.second].translation()).norm();
+
       geometry_msgs::Point p1;
       p1.x = gt_poses[pr.first].translation().x();
       p1.y = gt_poses[pr.first].translation().y();
@@ -230,9 +259,12 @@ public:
       p1.z = gt_poses[pr.second].translation().z();
       marker.points.emplace_back(p1);
 
-      marker.scale.x = 0.1;
-
       marker.lifetime = ros::Duration();
+
+      if (len > 10)
+        marker.scale.x = 0.01;
+      else
+        marker.scale.x = 0.1;
 
       marker.color.a = 1.0; // Don't forget to set the alpha!
       marker.color.r = 0.0f;
@@ -249,6 +281,9 @@ public:
 int main(int argc, char **argv) {
   ros::init(argc, argv, "rosbag_play_test");
   ros::NodeHandle nh;
+
+  FLAGS_alsologtostderr = true;
+  google::InitGoogleLogging(argv[0]);
 
   printf("tag 0\n");
   RosBagPlayLoopTest o(nh);
