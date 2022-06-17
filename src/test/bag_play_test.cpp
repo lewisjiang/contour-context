@@ -28,8 +28,9 @@ class RosBagPlayLoopTest {
   std::vector<std::shared_ptr<ContourManager>> scans;
   ContourDB contour_db;
   std::vector<Eigen::Isometry3d> gt_poses;
+  std::vector<double> poses_time_z_shift;
 
-  Cont2_ROS_IO <pcl::PointXYZ> ros_io;
+  Cont2_ROS_IO<pcl::PointXYZ> ros_io;
 
   tf2_ros::Buffer tfBuffer;
   tf2_ros::TransformListener tfListener;
@@ -72,29 +73,12 @@ public:
     Eigen::Vector3d time_translate(0, 0, 1);
     time_translate = time_translate * (time.toSec() - time_beg.toSec()) / 60;   // elevate 1m per minute
 
-    T_gt_last.pretranslate(time_translate);
+//    T_gt_last.pretranslate(time_translate);
     gt_poses.emplace_back(T_gt_last);
+    poses_time_z_shift.emplace_back(time_translate.z());
 
     tf_gt_last.transform.translation.z += time_translate.z();// elevate 1m per minute
     publishPath(time, tf_gt_last);
-
-//    try {
-//      auto tf_gt_last = tfBuffer.lookupTransform("world", "velodyne", time, ros::Duration(0.2));
-//      auto T_gt_last = tf2::transformToEigen(tf_gt_last);
-//
-//      Eigen::Vector3d time_translate(0, 0, 1);
-//      time_translate = time_translate * (time.toSec() - time_beg.toSec()) / 60;   // elevate 1m per minute
-//
-//      T_gt_last.pretranslate(time_translate);
-//      gt_poses.emplace_back(T_gt_last);
-//
-//      tf_gt_last.transform.translation.z += time_translate.z();// elevate 1m per minute
-//      publishPath(time, tf_gt_last);
-//
-//    } catch (tf2::TransformException &ex) {
-//      ROS_WARN("%s. Returning...", ex.what());
-//      return;
-//    }
 
     printf("our curr seq: %d, stamp: %lu\n", cnt, time.toNSec());
 
@@ -117,7 +101,7 @@ public:
                            std::to_string(out_ptr->header.stamp) + ".png";
       cmng_ptr->saveContourImage(f_name, i);
     }
-
+    cmng_ptr->clearImage();
 //    // case 1: poll over all data
 //    scans.emplace_back(cmng_ptr);
 //    if (scans.size() > 1) {
@@ -252,11 +236,11 @@ public:
       geometry_msgs::Point p1;
       p1.x = gt_poses[pr.first].translation().x();
       p1.y = gt_poses[pr.first].translation().y();
-      p1.z = gt_poses[pr.first].translation().z();
+      p1.z = gt_poses[pr.first].translation().z() + poses_time_z_shift[pr.first];
       marker.points.emplace_back(p1);
       p1.x = gt_poses[pr.second].translation().x();
       p1.y = gt_poses[pr.second].translation().y();
-      p1.z = gt_poses[pr.second].translation().z();
+      p1.z = gt_poses[pr.second].translation().z() + poses_time_z_shift[pr.second];
       marker.points.emplace_back(p1);
 
       marker.lifetime = ros::Duration();

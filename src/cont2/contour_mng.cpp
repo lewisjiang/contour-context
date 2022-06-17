@@ -4,7 +4,7 @@
 
 #include "cont2/contour_mng.h"
 
- void ContourManager::saveContours(const std::string &fpath,
+void ContourManager::saveContours(const std::string &fpath,
                                   const std::vector<std::vector<std::shared_ptr<ContourView>>> &cont_views) {
   // 0:level, 1:cell_cnt, 2:pos_mean, 4:pos_cov, 8:eig_vals, eig_vecs(10), 14:eccen, 15:vol3_mean, 16:com, 18,19:..
   // Note that recording data as strings has accuracy loss
@@ -49,7 +49,7 @@
 void ContourManager::makeContours() {
 //    float h_min = -VAL_ABS_INF_;
   cv::Mat last_label_img;
-  int lev = 0;
+  int16_t lev = 0;
   for (const auto &h_min: cfg_.lv_grads_) {
     printf("Height [%f, +]\n", h_min);
     // clamp image
@@ -85,14 +85,20 @@ void ContourManager::makeContours() {
 //          cv::Mat1b mask_n = labels(rect) == n;
 //          printf("countour ROI: %d, %d\n", mask_n.rows, mask_n.cols);
 
-        std::shared_ptr<ContourView> ptr_tmp_cv(
-            new ContourView(lev, h_min, h_min, rect, nullptr)); // TODO: dummy h_max
+        RunningStatRecorder tmp_rec;
+        int poi_r = -1, poi_c = -1;
 
         for (int i = rect.y; i < rect.y + rect.height; i++)
           for (int j = rect.x; j < rect.x + rect.width; j++)
-            ptr_tmp_cv->runningStats(i, j, bev_(i, j));
+            if (bev_(i, j) > h_min) {  // consistent with opencv threshold: if src(x,y)>thresh, ...
+              tmp_rec.runningStats(i, j, bev_(i, j));
+              poi_r = i;
+              poi_c = j;
+            }
 
-        ptr_tmp_cv->calcStatVals();
+//        std::shared_ptr<ContourView> ptr_tmp_cv(new ContourView(lev, poi_r, poi_c, nullptr));
+        std::shared_ptr<ContourView> ptr_tmp_cv(new ContourView(lev, poi_r, poi_c));
+        ptr_tmp_cv->calcStatVals(tmp_rec, view_stat_cfg_);
         DCHECK(ptr_tmp_cv->cell_cnt_ == stats(n, 4));
         level_conts.emplace_back(ptr_tmp_cv);
       }
@@ -111,10 +117,12 @@ void ContourManager::makeContours() {
 }
 
 void ContourManager::saveContourImage(const std::string &fpath, int level) const {
+  CHECK(!bev_.empty());
   cv::imwrite(fpath, getContourImage(level));
 }
 
-std::pair<Eigen::Isometry2d, bool> ContourManager::calcScanCorresp(const ContourManager &src, const ContourManager &tgt) {
+std::pair<Eigen::Isometry2d, bool>
+ContourManager::calcScanCorresp(const ContourManager &src, const ContourManager &tgt) {
   DCHECK_EQ(src.cont_views_.size(), tgt.cont_views_.size());
   printf("calcScanCorresp(): \n");
 
@@ -166,36 +174,37 @@ std::pair<Eigen::Isometry2d, bool> ContourManager::calcScanCorresp(const Contour
             continue;
 
           // 3. check contour orientation
-          Eigen::Vector2d cent_s = (sc1->pos_mean_ - sc2->pos_mean_).normalized();
-          Eigen::Vector2d cent_t = (tc1->pos_mean_ - tc2->pos_mean_).normalized();
+          V2F cent_s = (sc1->pos_mean_ - sc2->pos_mean_).normalized();
+          V2F cent_t = (tc1->pos_mean_ - tc2->pos_mean_).normalized();
           if (sc1->ecc_feat_ && tc1->ecc_feat_) {
-            double theta_s = std::acos(cent_s.transpose() * sc1->eig_vecs_.col(1));   // acos: [0,pi)
-            double theta_t = std::acos(cent_t.transpose() * tc1->eig_vecs_.col(1));
-            if (diff_delt(theta_s, theta_t, M_PI / 12) && diff_delt(M_PI - theta_s, theta_t, M_PI / 12))
+            float theta_s = std::acos(cent_s.transpose() * sc1->eig_vecs_.col(1));   // acos: [0,pi)
+            float theta_t = std::acos(cent_t.transpose() * tc1->eig_vecs_.col(1));
+            if (diff_delt<float>(theta_s, theta_t, M_PI / 12) && diff_delt<float>(M_PI - theta_s, theta_t, M_PI / 12))
               continue;
           }
           if (sc2->ecc_feat_ && tc2->ecc_feat_) {
-            double theta_s = std::acos(cent_s.transpose() * sc2->eig_vecs_.col(1));   // acos: [0,pi)
-            double theta_t = std::acos(cent_t.transpose() * tc2->eig_vecs_.col(1));
-            if (diff_delt(theta_s, theta_t, M_PI / 6) && diff_delt(M_PI - theta_s, theta_t, M_PI / 6))
+            float theta_s = std::acos(cent_s.transpose() * sc2->eig_vecs_.col(1));   // acos: [0,pi)
+            float theta_t = std::acos(cent_t.transpose() * tc2->eig_vecs_.col(1));
+            if (diff_delt<float>(theta_s, theta_t, M_PI / 6) && diff_delt<float>(M_PI - theta_s, theta_t, M_PI / 6))
               continue;
           }
 
           // 4. PROSAC
           // 4.1 get the rough transform to facilitate the similarity check (relatively large acceptance range)
           // can come from a naive 2 point transform estimation or a gmm2gmm
-          Eigen::Matrix3d T_delta = estimateTF(sc1->pos_mean_, sc2->pos_mean_, tc1->pos_mean_,
-                                               tc2->pos_mean_).matrix(); // naive 2 point estimation
+          Eigen::Matrix3d T_delta = estimateTF<double>(sc1->pos_mean_.cast<double>(), sc2->pos_mean_.cast<double>(),
+                                                       tc1->pos_mean_.cast<double>(),
+                                                       tc2->pos_mean_.cast<double>()).matrix(); // naive 2 point estimation
 
           // for pointset transform estimation
           Eigen::Matrix<double, 2, Eigen::Dynamic> pointset1; // src
           Eigen::Matrix<double, 2, Eigen::Dynamic> pointset2; // tgt
           pointset1.resize(2, 2);
           pointset2.resize(2, 2);
-          pointset1.col(0) = sc1->pos_mean_;
-          pointset1.col(1) = sc2->pos_mean_;
-          pointset2.col(0) = tc1->pos_mean_;
-          pointset2.col(1) = tc2->pos_mean_;
+          pointset1.col(0) = sc1->pos_mean_.cast<double>();
+          pointset1.col(1) = sc2->pos_mean_.cast<double>();
+          pointset2.col(0) = tc1->pos_mean_.cast<double>();
+          pointset2.col(1) = tc2->pos_mean_.cast<double>();
 
           // 4.2 create adjacency matrix (binary weight bipartite graph) or calculate on the go?
           std::vector<std::pair<int, int>> match_list = {{comb.first,  i},
@@ -209,8 +218,8 @@ std::pair<Eigen::Isometry2d, bool> ContourManager::calcScanCorresp(const Contour
             for (int jj = 0; jj < std::min((int) tgt.cont_views_[l].size(), num_tgt_ser); jj++) {
               if (used_tgt.find(jj) != used_tgt.end())
                 continue;
-              V2D pos_mean_src_tf = T_delta.block<2, 2>(0, 0) * src.cont_views_[l][ii]->pos_mean_
-                                    + T_delta.block<2, 1>(0, 2);
+              V2F pos_mean_src_tf = T_delta.block<2, 2>(0, 0).cast<float>() * src.cont_views_[l][ii]->pos_mean_
+                                    + T_delta.block<2, 1>(0, 2).cast<float>();
               if ((pos_mean_src_tf - tgt.cont_views_[l][jj]->pos_mean_).norm() > tf_dist_max ||
                   !ContourView::checkSim(*src.cont_views_[l][ii], *tgt.cont_views_[l][jj])
                   )
@@ -226,8 +235,8 @@ std::pair<Eigen::Isometry2d, bool> ContourManager::calcScanCorresp(const Contour
 
               pointset1.conservativeResize(Eigen::NoChange_t(), match_list.size());
               pointset2.conservativeResize(Eigen::NoChange_t(), match_list.size());
-              pointset1.rightCols(1) = src.cont_views_[l][ii]->pos_mean_;
-              pointset2.rightCols(1) = tgt.cont_views_[l][jj]->pos_mean_;
+              pointset1.rightCols(1) = src.cont_views_[l][ii]->pos_mean_.cast<double>();
+              pointset2.rightCols(1) = tgt.cont_views_[l][jj]->pos_mean_.cast<double>();
               T_delta = Eigen::umeyama(pointset1, pointset2, false);  // also need to check consensus
 
             }
@@ -290,6 +299,8 @@ void ContourManager::makeContourRecursiveHelper(const cv::Rect &cc_roi, const cv
   // https://stackoverflow.com/questions/37745274/opencv-find-perimeter-of-a-connected-component/48618464#48618464
   for (int n = 1; n < stats.rows; n++) {  // n=0: background
 //      printf("Area: %d\n", stats.at<int>(n, cv::CC_STAT_AREA));
+    if (stats(n, 4) < cfg_.min_cont_cell_cnt_)  // ignore contours that are too small
+      continue;
 
     //Rectangle around the connected component
     // Rect: col0, row0, n_col, n_row
@@ -298,20 +309,32 @@ void ContourManager::makeContourRecursiveHelper(const cv::Rect &cc_roi, const cv
 
     cv::Mat1b mask_n = labels(rect_l) == n;
 
-    std::shared_ptr<ContourView> ptr_tmp_cv(new ContourView(level, h_min, h_max, rect_g, parent));
+    RunningStatRecorder tmp_rec;
+    int poi_r = -1, poi_c = -1;  // the point(r,c) coordinate on the global bev for the contour
 
     for (int i = 0; i < rect_l.height; i++)
       for (int j = 0; j < rect_l.width; j++)
         if (mask_n(i, j)) {
-//            ptr_tmp_cv->runningStats(i + rect_g.y, j + rect_g.x, bev_(i + rect_g.y, j + rect_g.x)); // discrete
-          V2F c_point = c_height_position_[i + rect_g.y][j + rect_g.x];
-          ptr_tmp_cv->runningStatsF(c_point.x(), c_point.y(), bev_(i + rect_g.y, j + rect_g.x)); // continuous
+          poi_r = i + rect_g.y;
+          poi_c = j + rect_g.x;
+//            tmp_rec.runningStats(i + rect_g.y, j + rect_g.x, bev_(i + rect_g.y, j + rect_g.x)); // discrete
+//          V2F c_point = pillar_pos2f_.at(poi_r * cfg_.n_col_ + poi_c);
+
+          int q_hash = poi_r * cfg_.n_col_ + poi_c;
+          std::pair<int, Pixelf> sear_res = search_vec<Pixelf>(bev_pixfs_, 0,
+                                                               (int) bev_pixfs_.size() - 1, q_hash);
+          DCHECK_EQ(sear_res.first, q_hash);
+          tmp_rec.runningStatsF(sear_res.second.row_f, sear_res.second.col_f, bev_(poi_r, poi_c)); // continuous
+//          tmp_rec.runningStatsF(c_point.x(), c_point.y(), bev_(poi_r, poi_c)); // continuous
         }
-    ptr_tmp_cv->calcStatVals();
+
+//    std::shared_ptr<ContourView> ptr_tmp_cv(new ContourView(level, poi_r, poi_c, parent));
+    std::shared_ptr<ContourView> ptr_tmp_cv(new ContourView(level, poi_r, poi_c));
+    ptr_tmp_cv->calcStatVals(tmp_rec, view_stat_cfg_);
     DCHECK(ptr_tmp_cv->cell_cnt_ == stats(n, 4));
     cont_views_[level].emplace_back(ptr_tmp_cv);    // add to the manager's matrix
-    if (parent)
-      parent->children_.emplace_back(ptr_tmp_cv);
+//    if (parent)
+//      parent->children_.emplace_back(ptr_tmp_cv);
 
     // recurse
     // Get the mask for the contour

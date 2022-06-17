@@ -11,11 +11,6 @@
 
 #include <utility>
 #include <vector>
-#include <set>
-#include <map>
-#include <unordered_map>
-#include <unordered_set>
-#include <queue>
 #include <iostream>
 
 #include <glog/logging.h>
@@ -34,73 +29,26 @@ typedef Eigen::Matrix<double, 2, 1> V2D;
 typedef Eigen::Matrix<double, 2, 2> M2D;
 
 
-//struct RectRoi {
-//  int r, c, nr, nc;
-//
-//  RectRoi(int r0, int c0, int nr0, int nc0) : r(r0), c(c0), nr(nr0), nc(nc0) {}
-//};
-
-struct ContourViewConfig {
-  int min_cell_cov_ = 4;
-  double point_sigma_ = 1.0; // have nothing to do with resolution: on pixel only
-  double com_bias_thres = 0.5;  // com dist from geometric center
-  int half_strip_num_ = 4;
+struct ContourViewStatConfig {
+  int16_t min_cell_cov_ = 4;
+  float point_sigma_ = 1.0; // have nothing to do with resolution: on pixel only
+  float com_bias_thres = 0.5;  // com dist from geometric center
+//  int half_strip_num_ = 4;
 };
 
-class ContourView {
-public:
-  // Coordinate definition:
-  //  row as x, col as y, center of pixel(0,0) as origin.
-  //  Use (row, col) to access all the image data
-
-  // config
-  const ContourViewConfig cfg_;
-
-  // property:
-  int level_;
-  float h_min_, h_max_;
-  cv::Rect aabb_; // axis aligned bounding box of the current contour
-//  int poi_[2]; // a point belonging to this contour/slice
-
-  // data (collected on the run)
-  int cell_cnt_{};
+// use a separate recorder to record when creating contour view, and discard it after use.
+struct RunningStatRecorder {
+  int16_t cell_cnt_{};
   V2D cell_pos_sum_;
   M2D cell_pos_tss_;
   float cell_vol3_{};  // or "weight" of the elevation mountain. Should we include volumns under the h_min_?
   V2D cell_vol3_torq_;
 
-  // statistical summary
-  V2D pos_mean_;
-  M2D pos_cov_;
-  V2D eig_vals_;
-  M2D eig_vecs_; // gaussian ellipsoid axes. if ecc_feat_==false, this is meaningless
-  float eccen_{};   // 0: circle
-  float vol3_mean_{};
-  V2D com_; // center of mass
-  bool ecc_feat_ = false;   // eccentricity large enough (with enough cell count)
-  bool com_feat_ = false;   // com not at fitted geometric center
-
-  // Raw data (the pixels that belong to this Contour. Is is necessary?)
-  // TODO
-  std::vector<V2D> voxels_pos_;
-  std::vector<float> strip_width_;
-
-  // hierarchy
-  std::shared_ptr<ContourView> parent_;
-  std::vector<std::shared_ptr<ContourView>> children_;
-
-public:
-  // TODO: 0. build a contour from 3: pic, roi, height threshold. Called in manager.
-  explicit ContourView(int level, float h_min, float h_max, const cv::Rect &aabb,
-                       std::shared_ptr<ContourView> parent) : level_(level), h_min_(h_min), h_max_(h_max),
-                                                              aabb_(aabb), parent_(std::move(parent)) {
+  RunningStatRecorder() {
     cell_pos_sum_.setZero();
     cell_pos_tss_.setZero();
     cell_vol3_torq_.setZero();
-    DCHECK_GE(cfg_.half_strip_num_, 2);
-  };
-
-  ContourView(const ContourView &obj) = default;
+  }
 
   // TODO: call this function everytime encounters a pixel belonging to this connected component
   void runningStats(int curr_row, int curr_col, float height) {
@@ -112,7 +60,7 @@ public:
     cell_pos_tss_ += v_rc * v_rc.transpose();
     cell_vol3_ += height;
     cell_vol3_torq_ += height * v_rc;
-    voxels_pos_.emplace_back(v_rc);
+//    voxels_pos_.emplace_back(v_rc);  // desc cont itself (5/6)
   }
 
   void runningStatsF(float curr_row, float curr_col, float height) {   // a more accurate one with continuous coordinate
@@ -124,47 +72,104 @@ public:
     cell_pos_tss_ += v_rc * v_rc.transpose();
     cell_vol3_ += height;
     cell_vol3_torq_ += height * v_rc;
-    voxels_pos_.emplace_back(v_rc);
+//    voxels_pos_.emplace_back(v_rc);  // desc cont itself (4/6)
   }
 
-  // TOxDO: 1. build children_ from a current contour
+  static RunningStatRecorder addContourStat(const RunningStatRecorder &rec1, const RunningStatRecorder &rec2) {
+    RunningStatRecorder res;
+    res.cell_cnt_ = rec1.cell_cnt_ + rec2.cell_cnt_;
+    res.cell_pos_sum_ = rec1.cell_pos_sum_ + rec2.cell_pos_sum_;
+    res.cell_pos_tss_ = rec1.cell_pos_tss_ + rec2.cell_pos_tss_;
+    res.cell_vol3_ = rec1.cell_vol3_ + rec2.cell_vol3_;
+    res.cell_vol3_torq_ = rec1.cell_vol3_torq_ + rec2.cell_vol3_torq_;
+    return res;
+  }
+};
+
+struct ContourView {
+  // Coordinate definition:
+  //  row as x, col as y, center of pixel(0,0) as origin.
+  //  Use (row, col) to access all the image data
+
+  // config
+//  const ContourViewStatConfig cfg_;
+
+  // property:
+  int16_t level_;
+  int16_t poi_[2]; // a point in full bev coordinate belonging to this contour/slice.
+
+  // statistical summary
+  int16_t cell_cnt_{};
+  V2F pos_mean_;
+  M2F pos_cov_;
+  V2F eig_vals_;
+  M2F eig_vecs_; // gaussian ellipsoid axes. if ecc_feat_==false, this is meaningless
+  float eccen_{};   // 0: circle
+  float vol3_mean_{};
+  V2F com_; // center of mass
+  bool ecc_feat_ = false;   // eccentricity large enough (with enough cell count)
+  bool com_feat_ = false;   // com not at fitted geometric center
+
+  // Raw data (the pixels that belong to this Contour. Is is necessary?)
+  // TODO
+  // desc cont itself (6/6)
+//  std::vector<V2D> voxels_pos_;
+//  std::vector<float> strip_width_;
+
+//  // hierarchy
+//  std::shared_ptr<ContourView> parent_;
+//  std::vector<std::shared_ptr<ContourView>> children_;
+
+  // TODO: 0. build a contour from 3: pic, roi, height threshold. Called in manager.
+  explicit ContourView(int16_t level, int16_t poi_r, int16_t poi_c) : level_(level) {
+    DCHECK_GE(poi_r, 0);
+    DCHECK_GE(poi_c, 0);
+    poi_[0] = poi_r;
+    poi_[1] = poi_c;
+  };
+
+  ContourView(const ContourView &obj) = default;
 
   // TO-DO: 2. calculate statistics from running data (including feature hypothesis)
-  void calcStatVals() {
-    pos_mean_ = cell_pos_sum_ / cell_cnt_;
+  void calcStatVals(const RunningStatRecorder &rec, const ContourViewStatConfig &cfg) {
+    cell_cnt_ = rec.cell_cnt_;
+    pos_mean_ = rec.cell_pos_sum_.cast<float>() / cell_cnt_;
 
-    vol3_mean_ = cell_vol3_ / cell_cnt_;
-    com_ = cell_vol3_torq_ / cell_vol3_;
+    vol3_mean_ = rec.cell_vol3_ / cell_cnt_;
+    com_ = rec.cell_vol3_torq_.cast<float>() / rec.cell_vol3_;
 
-    strip_width_.clear();
+//    strip_width_.clear();   desc cont itself (3/6)
 
     // eccentricity:
-    if (cell_cnt_ < cfg_.min_cell_cov_) {
-      pos_cov_ = M2D::Identity() * cfg_.point_sigma_ * cfg_.point_sigma_;
-      eig_vals_ = V2D(cfg_.point_sigma_, cfg_.point_sigma_);
+    if (cell_cnt_ < cfg.min_cell_cov_) {
+      pos_cov_ = M2F::Identity() * cfg.point_sigma_ * cfg.point_sigma_;
+      eig_vals_ = V2F(cfg.point_sigma_, cfg.point_sigma_);
       eig_vecs_.setIdentity();
       ecc_feat_ = false;
       com_feat_ = false;
-      strip_width_.resize(cfg_.half_strip_num_, 0);
+//      strip_width_.resize(cfg.half_strip_num_, 0);   desc cont itself (2/6)
     } else {
-      pos_cov_ = (cell_pos_tss_ - cell_pos_sum_ * pos_mean_.transpose() - pos_mean_ * cell_pos_sum_.transpose() +
-                  pos_mean_ * pos_mean_.transpose() * cell_cnt_) / (cell_cnt_ - 1);
-      Eigen::SelfAdjointEigenSolver<M2D> es(pos_cov_.template selfadjointView<Eigen::Upper>());
+      pos_cov_ =
+//          (rec.cell_pos_tss_ - rec.cell_pos_sum_ * pos_mean_.transpose() - pos_mean_ * rec.cell_pos_sum_.transpose() +
+//           pos_mean_ * pos_mean_.transpose() * cell_cnt_) / (cell_cnt_ - 1);
+          (rec.cell_pos_tss_.cast<float>() - pos_mean_ * pos_mean_.transpose() * cell_cnt_) /
+          (cell_cnt_ - 1); // simplified, verified
+      Eigen::SelfAdjointEigenSolver<M2F> es(pos_cov_.template selfadjointView<Eigen::Upper>());
       eig_vals_ = es.eigenvalues();  // increasing order
-      if (eig_vals_(0) < cfg_.point_sigma_)  // determine if eccentricity feat using another function
-        eig_vals_(0) = cfg_.point_sigma_;
-      if (eig_vals_(1) < cfg_.point_sigma_)
-        eig_vals_(1) = cfg_.point_sigma_;
+      if (eig_vals_(0) < cfg.point_sigma_)  // determine if eccentricity feat using another function
+        eig_vals_(0) = cfg.point_sigma_;
+      if (eig_vals_(1) < cfg.point_sigma_)
+        eig_vals_(1) = cfg.point_sigma_;
       eccen_ = std::sqrt(eig_vals_(1) * eig_vals_(1) - eig_vals_(0) * eig_vals_(0)) / eig_vals_(1);
       eig_vecs_ = es.eigenvectors();
 
-      ecc_feat_ = eccentricitySalient();
+      ecc_feat_ = eccentricitySalient(cfg);
 
       // vol/weight of mountain:
-      com_feat_ = centerOfMassSalient();
+      com_feat_ = centerOfMassSalient(cfg);
 
-      // describe ellipse with ratio areas
-      std::vector<V2D> strips;  // {perp long axis:along long axis}, since the large eig vec is the second one
+      // describe ellipse with ratio areas. desc cont itself (1/6)
+/*      std::vector<V2D> strips;  // {perp long axis:along long axis}, since the large eig vec is the second one
       for (auto &voxels_po: voxels_pos_) {
         strips.emplace_back((voxels_po - pos_mean_).transpose() * eig_vecs_);
       }
@@ -176,13 +181,13 @@ public:
       strip_end += 1e-3;
 
       // descriptor 1: rotation invariant
-//      std::vector<std::pair<double, double>> bins(cfg_.half_strip_num_, {-1, -1});  // interpolation (1/2)
+//      std::vector<std::pair<double, double>> bins(cfg.half_strip_num_, {-1, -1});  // interpolation (1/2)
 //      bins.front() = {0, 0};
 //      bins.back() = {0, 0};
 
-      std::vector<std::pair<double, double>> bins(cfg_.half_strip_num_, {0.0, 0.0});
-      std::vector<std::pair<int, int>> bins_elem_cnt(cfg_.half_strip_num_, {0, 0});
-      double step = (strip_end - strip_beg) / cfg_.half_strip_num_;
+      std::vector<std::pair<double, double>> bins(cfg.half_strip_num_, {0.0, 0.0});
+      std::vector<std::pair<int, int>> bins_elem_cnt(cfg.half_strip_num_, {0, 0});
+      double step = (strip_end - strip_beg) / cfg.half_strip_num_;
       for (auto &strip: strips) {
         int bin_idx = std::floor((strip.y() - strip_beg) / step);
 //        // case 1: use max value as feature "bit":
@@ -202,7 +207,7 @@ public:
       }
 
       // case 2 (2/2)
-      for (int i = 0; i < cfg_.half_strip_num_; i++) {
+      for (int i = 0; i < cfg.half_strip_num_; i++) {
         if (bins_elem_cnt[i].first)
           bins[i].first /= bins_elem_cnt[i].first;
         if (bins_elem_cnt[i].second)
@@ -212,7 +217,7 @@ public:
 //      // // fill the -1 s, interpolation (2/2)
 //      // // NOTE: we may not need interpolate, since very small ellipse are not very likely to be chosen as features.
 //      int p1 = 0, p2 = 0;
-//      for (int i = 1; i < cfg_.half_strip_num_; i++) {    // the first and last bin always has elements (val !=-1)
+//      for (int i = 1; i < cfg.half_strip_num_; i++) {    // the first and last bin always has elements (val !=-1)
 //        if (bins[i].first >= 0) {
 //          if (i - p1 > 1) {  // we can do w/o this if
 //            double diff_lev = (bins[i].first - bins[p1].first) / (i - p1);
@@ -232,27 +237,27 @@ public:
 //      }
 
       // // add
-      for (int i = 0; i < cfg_.half_strip_num_; i++) {
-        strip_width_.emplace_back(bins[i].first + bins[cfg_.half_strip_num_ - 1 - i].second);
+      for (int i = 0; i < cfg.half_strip_num_; i++) {
+        strip_width_.emplace_back(bins[i].first + bins[cfg.half_strip_num_ - 1 - i].second);
       }
-
+*/
 
     }
 
   }
 
   // TODO
-  inline bool eccentricitySalient() {
-    return cell_cnt_ > 5 && diff_perc(eig_vals_(0), eig_vals_(1), 0.2) && eig_vals_(1) > 2.5;
+  inline bool eccentricitySalient(const ContourViewStatConfig &cfg) const {
+    return cell_cnt_ > 5 && diff_perc<float>(eig_vals_(0), eig_vals_(1), 0.2f) && eig_vals_(1) > 2.5f;
   }
 
   // TODO: should have sth to do with total area
-  inline bool centerOfMassSalient() const {
-    return (com_ - pos_mean_).norm() > cfg_.com_bias_thres;
+  inline bool centerOfMassSalient(const ContourViewStatConfig &cfg) const {
+    return (com_ - pos_mean_).norm() > cfg.com_bias_thres;
   }
 
   // TODO
-  bool orietSalient() {
+  bool orietSalient(const ContourViewStatConfig &cfg) const {
     return false;
   }
 
@@ -268,31 +273,32 @@ public:
 //    std::pair<Eigen::Isometry2d, bool> ret(Eigen::Isometry2d(), false);
     bool ret = false;
     // 1. area, 2.3. eig, 4. com;
-    if (diff_perc(cont_src.cell_cnt_, cont_tgt.cell_cnt_, 0.2)) {
+    if (diff_perc<float>(cont_src.cell_cnt_, cont_tgt.cell_cnt_, 0.2f)) {  // TODO: skip this for points
 //      printf("\tCell cnt not pass.\n");
       return ret;
     }
 
     if (std::max(cont_src.cell_cnt_, cont_tgt.cell_cnt_) > 15 &&
-        diff_delt(cont_src.vol3_mean_, cont_tgt.vol3_mean_, 0.3)) {
+        diff_delt<float>(cont_src.vol3_mean_, cont_tgt.vol3_mean_, 0.3f)) {
 //      printf("\tAvg height not pass.\n");
       return ret;
     }
 
     if (std::max(cont_src.eig_vals_(1), cont_tgt.eig_vals_(1)) > 2.0 &&
-        diff_perc(std::sqrt(cont_src.eig_vals_(1)), std::sqrt(cont_tgt.eig_vals_(1)), 0.2)) {
+        diff_perc<float>(std::sqrt(cont_src.eig_vals_(1)), std::sqrt(cont_tgt.eig_vals_(1)), 0.2f)) {
 //      printf("\tBig eigval not pass.\n");
       return ret;
     }
 
     if (std::max(cont_src.eig_vals_(0), cont_tgt.eig_vals_(0)) > 1.0 &&
-        diff_perc(std::sqrt(cont_src.eig_vals_(0)), std::sqrt(cont_tgt.eig_vals_(0)), 0.2)) {
+        diff_perc<float>(std::sqrt(cont_src.eig_vals_(0)), std::sqrt(cont_tgt.eig_vals_(0)), 0.2f)) {
 //      printf("\tSmall eigval not pass.\n");
       return ret;
     }
 
     if (std::max((cont_src.com_ - cont_src.pos_mean_).norm(), (cont_tgt.com_ - cont_tgt.pos_mean_).norm()) > 0.5 &&
-        diff_perc((cont_src.com_ - cont_src.pos_mean_).norm(), (cont_tgt.com_ - cont_tgt.pos_mean_).norm(), 0.25)) {
+        diff_perc<float>((cont_src.com_ - cont_src.pos_mean_).norm(), (cont_tgt.com_ - cont_tgt.pos_mean_).norm(),
+                         0.25f)) {
 //      printf("\tCom radius not pass.\n");
       return ret;
     }
@@ -302,15 +308,27 @@ public:
   }
 
   // TODO: 4. add two contours. Only statistical parts are useful
-  static ContourView addContourStat(const ContourView &cont1, const ContourView &cont2) {
+
+
+  // Add contour results (**NOT** accurate statistics!)
+  // procedure: revert to stat recorder and merge
+  static ContourView
+  addContourRes(const ContourView &cont1, const ContourView &cont2, const ContourViewStatConfig &cfg) {
     CHECK_EQ(cont1.level_, cont2.level_);
-    ContourView res(cont1.level_, cont1.h_min_, cont1.h_max_, cont1.aabb_, nullptr);
-    res.cell_cnt_ = cont1.cell_cnt_ + cont2.cell_cnt_;
-    res.cell_pos_sum_ = cont1.cell_pos_sum_ + cont2.cell_pos_sum_;
-    res.cell_pos_tss_ = cont1.cell_pos_tss_ + cont2.cell_pos_tss_;
-    res.cell_vol3_ = cont1.cell_vol3_ + cont2.cell_vol3_;
-    res.cell_vol3_torq_ = cont1.cell_vol3_torq_ + cont2.cell_vol3_torq_;
-    res.calcStatVals();
+    RunningStatRecorder media;
+    media.cell_cnt_ = cont1.cell_cnt_ + cont2.cell_cnt_;
+    media.cell_pos_sum_ = (cont1.cell_cnt_ * cont1.pos_mean_ + cont2.cell_cnt_ * cont2.pos_mean_).cast<double>();
+    media.cell_vol3_ = cont1.cell_cnt_ * cont1.vol3_mean_ + cont2.cell_cnt_ * cont2.vol3_mean_;
+    media.cell_vol3_torq_ = (cont1.com_ * (cont1.cell_cnt_ * cont1.vol3_mean_)
+                             + cont2.com_ * (cont2.cell_cnt_ * cont2.vol3_mean_)).cast<double>();
+    media.cell_pos_tss_ =
+        (cont1.pos_cov_ * (cont1.cell_cnt_ - 1) + cont1.cell_cnt_ * cont1.pos_mean_ * cont1.pos_mean_.transpose()
+         + cont2.pos_cov_ * (cont2.cell_cnt_ - 1) + cont2.cell_cnt_ * cont2.pos_mean_ * cont2.pos_mean_.transpose()
+        ).cast<double>();
+
+    ContourView res(cont1.level_, cont1.poi_[0], cont1.poi_[1]);
+    res.calcStatVals(media, cfg);
+
     return res;
   }
 
@@ -334,7 +352,7 @@ public:
 //
 //  }
 
-  inline M2D getManualCov() const {
+  inline M2F getManualCov() const {
     return eig_vecs_ * eig_vals_.asDiagonal() * eig_vecs_.transpose();
   }
 

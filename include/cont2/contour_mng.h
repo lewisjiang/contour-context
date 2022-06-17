@@ -9,6 +9,8 @@
 #include <fstream>
 #include <cstdlib>
 #include <bitset>
+#include <set>
+#include <map>
 #include "cont2/contour.h"
 #include "tools/algos.h"
 
@@ -38,29 +40,29 @@ struct ArrayAsKey {
     SizeAtCompileTime = sz
   };
 //  static constexpr size_t SizeAtCompileTime = sz;  // undefined reference when linking
-  KeyFloatType vals[sz]{};
+  KeyFloatType array[sz]{};
 
   KeyFloatType *data() {
-    return vals;
+    return array;
   }
 
-  KeyFloatType &operator()(size_t i) { return vals[i]; }
+  KeyFloatType &operator()(size_t i) { return array[i]; }
 
-  const KeyFloatType &operator()(size_t i) const { return vals[i]; }
+  const KeyFloatType &operator()(size_t i) const { return array[i]; }
 
-  KeyFloatType &operator[](size_t i) { return vals[i]; }
+  KeyFloatType &operator[](size_t i) { return array[i]; }
 
-  const KeyFloatType &operator[](size_t i) const { return vals[i]; }
+  const KeyFloatType &operator[](size_t i) const { return array[i]; }
 
   ArrayAsKey<sz> operator-(ArrayAsKey<sz> const &obj) const {
     ArrayAsKey<sz> res;
     for (int i = 0; i < sz; i++)
-      res.vals[i] = vals[i] - obj.vals[i];
+      res.array[i] = array[i] - obj.array[i];
     return res;
   }
 
   void setZero() {
-    std::fill(vals, vals + SizeAtCompileTime, KeyFloatType(0));
+    std::fill(array, array + SizeAtCompileTime, KeyFloatType(0));
   }
 
   size_t size() const {
@@ -69,14 +71,14 @@ struct ArrayAsKey {
 
   KeyFloatType sum() const {
     KeyFloatType ret(0);
-    for (const auto &dat: vals)
+    for (const auto &dat: array)
       ret += dat;
     return ret;
   }
 
   KeyFloatType squaredNorm() const {
     KeyFloatType ret(0);
-    for (const auto &dat: vals)
+    for (const auto &dat: array)
       ret += dat * dat;
     return ret;
   }
@@ -88,54 +90,73 @@ using RetrievalKey = ArrayAsKey<RET_KEY_DIM>;
 struct ContourManagerConfig {
   std::vector<float> lv_grads_;  // n marks, n+1 levels
   //
-  float reso_row_ = 2.0f, reso_col_ = 2.0f;
-  int n_row_ = 100, n_col_ = 100;
+//  float reso_row_ = 2.0f, reso_col_ = 2.0f;
+//  int n_row_ = 100, n_col_ = 100;
+  float reso_row_ = 1.0f, reso_col_ = 1.0f;
+  int n_row_ = 150, n_col_ = 150;
+
   float lidar_height_ = 2.0f;  // ground assumption
   float blind_sq_ = 9.0f;
 
   int cont_cnt_thres_ = 5; // the cell count threshold dividing a shaped blob from a point
   int min_cont_key_cnt_ = 9;  // minimal the cell count to calculate a valid key around an anchor contour
+  int min_cont_cell_cnt_ = 3; // the minimal
 };
 
-const int BITS_PER_LAYER = 64;
-const int DIST_BIN_LAYERS[] = {1, 2, 3, 4};  // the layers for the dist key
-const int NUM_BIN_KEY_LAYER = sizeof(DIST_BIN_LAYERS) / sizeof(int);
+const int16_t BITS_PER_LAYER = 64;
+const int8_t DIST_BIN_LAYERS[] = {1, 2, 3, 4};  // the layers for the dist key
+const int16_t NUM_BIN_KEY_LAYER = sizeof(DIST_BIN_LAYERS) / sizeof(int8_t);
 
-struct ConstellationPair {  // given a pair of ContourManager, this records the seq of 2 matched contours at certain level
-  int level{};
-  int seq_src{};
-  int seq_tgt{};
+union ConstellationPair {  // given a pair of ContourManager, this records the seq of 2 matched contours at certain level
+  struct {
+    int8_t level;
+    int8_t seq_src;
+    int8_t seq_tgt;
+  };
+  int data[1]{};
 
-  ConstellationPair(int l, int s, int t) : level(l), seq_src(s), seq_tgt(t) {}
+  ConstellationPair(int8_t l, int8_t s, int8_t t) : level(l), seq_src(s), seq_tgt(t) {}
 };
 
+//! binary constellation identity
 struct BCI { //binary constellation identity
-  struct RelativePoint {  // a point/star seen from an anchor contour
-    int level{};
-    int seq{};
-    float r{};
-    float theta{};
+  //! a point/star of the constellation seen from an anchor contour
+  union RelativePoint {
+    struct {
+      int8_t level;
+      int8_t seq;
+      int16_t bit_pos;
+      float r;
+      float theta;
+    };
+    int data[3]{};
 
-    RelativePoint(int l, int a, float b, float c) : level(l), seq(a), r(b), theta(c) {}
+    RelativePoint(int8_t l, int8_t a, int16_t b, float f1, float f2) : level(l), seq(a), bit_pos(b), r(f1), theta(f2) {}
 
 //    RelativePoint() = default;
   };
 
-  struct OriePairComp {
-    int level;  // the level at which the pairing occurs
-    int neigh_src;
-    int neigh_tgt;
-    float orie_diff;
+  //! potential pairs from 2 constellations that passed the dist check
+  union DistSimPair {
+    struct {
+      float orie_diff;  // the diff of star-anchor orientation
+      int8_t seq_src;  // source sequence of the neighbor of the anchor
+      int8_t seq_tgt;
+      int8_t level;  // the level at which the pairing occurs
+    };
+    int data[2]{};
 
-    OriePairComp(int l, int s, int t, float o) : level(l), neigh_src(s), neigh_tgt(t), orie_diff(o) {}
+    DistSimPair(int8_t l, int8_t s, int8_t t, float o) : level(l), seq_src(s), seq_tgt(t), orie_diff(o) {}
   };
 
   // Four member variable
   std::bitset<BITS_PER_LAYER * NUM_BIN_KEY_LAYER> dist_bin_;
-  std::map<u_int16_t, std::vector<RelativePoint>> dist_bit_neighbors_;  // {bit position in the bit vector: [neighbours point info, ...]}
-  int piv_seq_, level_;  // level and seq of the anchor
+//  std::map<u_int16_t, std::vector<RelativePoint>> dist_bit_neighbors_;  // {bit position in the bit vector: [neighbours point info, ...]}
+  std::vector<RelativePoint> nei_pts_;
+  std::vector<uint16_t> nei_idx_segs_;  // index in the `nei_pts_`, [seg[i], seg[i+1]) is a segment with the same dist bit set.
+  int8_t piv_seq_, level_;  // level and seq of the anchor/pivot
 
-  explicit BCI(int seq, int lev) : dist_bin_(0), piv_seq_(seq), level_(lev) {}
+  explicit BCI(int8_t seq, int8_t lev) : dist_bin_(0), piv_seq_(seq), level_(lev) {}
 
   // check the similarity of two BCI in terms of hidden constellation
   static int checkConstellSim(const BCI &src, const BCI &tgt, std::vector<ConstellationPair> &constell) {
@@ -151,38 +172,64 @@ struct BCI { //binary constellation identity
 //    std::cout << src.dist_bin_ << std::endl << tgt.dist_bin_ << std::endl;
 
     // the anchors are assumed to be matched
-    if (ovlp_sum >= 10 && max_ele >= 5) {
+    if (ovlp_sum >= 10 && max_ele >= 5) {  // TODO: use config instead of hardcoded
       // check the angular for constellation
-      std::vector<OriePairComp> potential_pairs;
+      std::vector<DistSimPair> potential_pairs;
 
-      for (u_int16_t b = 1; b < BITS_PER_LAYER * NUM_BIN_KEY_LAYER - 1; b++) {
-        if (tgt.dist_bin_[b])
-          for (const auto &rp2: tgt.dist_bit_neighbors_.at(b)) {
-            if (res1[b])  // .test(pos) will throw out-of-range exception
-              for (const auto &rp1: src.dist_bit_neighbors_.at(b)) {
-                DCHECK_EQ(rp1.level, rp2.level);
-                potential_pairs.emplace_back(rp1.level, rp1.seq, rp2.seq, rp2.theta - rp1.theta);
-              }
+//      for (u_int16_t b = 1; b < BITS_PER_LAYER * NUM_BIN_KEY_LAYER - 1; b++) {
+//        if (tgt.dist_bin_[b])
+//          for (const auto &rp2: tgt.dist_bit_neighbors_.at(b)) {
+//            if (res1[b])  // .test(pos) will throw out-of-range exception
+//              for (const auto &rp1: src.dist_bit_neighbors_.at(b)) {
+//                DCHECK_EQ(rp1.level, rp2.level);
+//                potential_pairs.emplace_back(rp1.level, rp1.seq, rp2.seq, rp2.theta - rp1.theta);
+//              }
+//
+//            if (res2[b])
+//              // align after shift left, but `bitset<> x[0]` starts from right, so = origin-1
+//              for (const auto &rp1: src.dist_bit_neighbors_.at(b - 1)) {
+//                DCHECK_EQ(rp1.level, rp2.level);
+//                potential_pairs.emplace_back(rp1.level, rp1.seq, rp2.seq, rp2.theta - rp1.theta);
+//              }
+//
+//            if (res3[b])
+//              for (const auto &rp1: src.dist_bit_neighbors_.at(b + 1)) {
+//                DCHECK_EQ(rp1.level, rp2.level);
+//                potential_pairs.emplace_back(rp1.level, rp1.seq, rp2.seq, rp2.theta - rp1.theta);
+//              }
+//          }
+//      }
 
-            if (res2[b])
-              // align after shift left, but `bitset<> x[0]` starts from right, so = origin-1
-              for (const auto &rp1: src.dist_bit_neighbors_.at(b - 1)) {
-                DCHECK_EQ(rp1.level, rp2.level);
-                potential_pairs.emplace_back(rp1.level, rp1.seq, rp2.seq, rp2.theta - rp1.theta);
-              }
+      int16_t p11 = 0, p12;
+      for (int16_t p2 = 0; p2 < tgt.nei_idx_segs_.size() - 1; p2++) {
+        while (p11 < src.nei_idx_segs_.size() - 1 &&
+               src.nei_pts_[src.nei_idx_segs_[p11]].bit_pos < tgt.nei_pts_[tgt.nei_idx_segs_[p2]].bit_pos - 1) {
+          p11++;
+        }
 
-            if (res3[b])
-              for (const auto &rp1: src.dist_bit_neighbors_.at(b + 1)) {
-                DCHECK_EQ(rp1.level, rp2.level);
-                potential_pairs.emplace_back(rp1.level, rp1.seq, rp2.seq, rp2.theta - rp1.theta);
-              }
+        p12 = p11;
+
+        while (p12 < src.nei_idx_segs_.size() - 1 &&
+               src.nei_pts_[src.nei_idx_segs_[p12]].bit_pos <= tgt.nei_pts_[tgt.nei_idx_segs_[p2]].bit_pos + 1) {
+          p12++;
+        }
+
+        for (int i = tgt.nei_idx_segs_[p2]; i < tgt.nei_idx_segs_[p2 + 1]; i++) {
+          for (int j = src.nei_idx_segs_[p11]; j < src.nei_idx_segs_[p12]; j++) {
+            const BCI::RelativePoint &rp1 = src.nei_pts_[j], &rp2 = tgt.nei_pts_[i];
+//            printf("Adding tgt %d : src %d,   p11:p12 %d, %d\n", i, j, p11, p12);
+            DCHECK_EQ(rp1.level, rp2.level);
+            DCHECK_LE(std::abs(rp1.bit_pos - rp2.bit_pos), 1);
+            potential_pairs.emplace_back(rp1.level, rp1.seq, rp2.seq, rp2.theta - rp1.theta);
           }
+        }
       }
+
       // potential_pairs.size() must >= ovlp_sum
       for (auto &x: potential_pairs)
         clampAng<float>(x.orie_diff);
 
-      std::sort(potential_pairs.begin(), potential_pairs.end(), [&](const OriePairComp &a, const OriePairComp &b) {
+      std::sort(potential_pairs.begin(), potential_pairs.end(), [&](const DistSimPair &a, const DistSimPair &b) {
         return a.orie_diff < b.orie_diff;
       });
 
@@ -210,16 +257,14 @@ struct BCI { //binary constellation identity
 
       // TODO: solve potential one-to-many matching ambiguity
       for (int i = max_in_range_beg; i < max_in_range + max_in_range_beg; i++) {
-        constell.emplace_back(potential_pairs[i % pot_sz].level, potential_pairs[i % pot_sz].neigh_src,
-                              potential_pairs[i % pot_sz].neigh_tgt);
+        constell.emplace_back(potential_pairs[i % pot_sz].level, potential_pairs[i % pot_sz].seq_src,
+                              potential_pairs[i % pot_sz].seq_tgt);
       }
       constell.emplace_back(src.level_, src.piv_seq_, tgt.piv_seq_);  // the pivots are also a pair.
 
       // the sort is for human readability
       std::sort(constell.begin(), constell.end(), [&](const ConstellationPair &a, const ConstellationPair &b) {
-        if (a.level == b.level)
-          return a.seq_src < b.seq_src;
-        return a.level < b.level;
+        return a.level < b.level || (a.level == b.level) && a.seq_src < b.seq_src;
       });
 
       return constell.size();
@@ -231,15 +276,37 @@ struct BCI { //binary constellation identity
   }
 };
 
+//! 2.5D continuous(float) pixel
+union Pixelf {
+  struct {
+    float row_f;
+    float col_f;
+    float elev;
+  };
+  int data[3]{};
 
-// manage the collection of contours in a scan
+  Pixelf(float r, float c, float e) : row_f(r), col_f(c), elev(e) {}
+
+  Pixelf() {
+    row_f = -1;
+    col_f = -1;
+    elev = -1;
+  }
+
+  bool operator<(const Pixelf &b) const {
+    return row_f < b.row_f;
+  }
+};
+
+//! manage the collection of contours in a scan
 class ContourManager {
   // configuration
   const ContourManagerConfig cfg_;
+  const ContourViewStatConfig view_stat_cfg_;
   const float VAL_ABS_INF_ = 1e3;
 
   // property
-  float x_max_, x_min_, y_max_, y_min_;
+  float x_max_, x_min_, y_max_, y_min_;  // for points in the sensor frame, not in the bev frame
   std::string str_id_;
   int int_id_;
 
@@ -247,17 +314,17 @@ class ContourManager {
   std::vector<std::vector<std::shared_ptr<ContourView>>> cont_views_;  // TODO: use a parallel vec of vec for points?
   std::vector<int> layer_cell_cnt_;  // total number of cells in each layer/level
   std::vector<std::vector<RetrievalKey>> layer_keys_;  // the key of each layer
-  std::vector<std::vector<BCI>> layer_key_bcis_;
+  std::vector<std::vector<BCI>> layer_key_bcis_;  // NOTE: No validity check on bci. Check key before using corresponding bci!
 
   cv::Mat1f bev_;
-  std::vector<std::vector<V2F>> c_height_position_;  // downsampled but not discretized point xy position, another bev
+//  std::vector<std::vector<V2F>> c_height_position_;  // downsampled but not discretized point xy position, another bev
+//  std::map<int, V2F> pillar_pos2f_;  // downsampled but not discretized point xy position,
+  std::vector<std::pair<int, Pixelf>> bev_pixfs_; // float row col height, and the hash generated from discrete row column.
   float max_bin_val_ = -VAL_ABS_INF_, min_bin_val_ = VAL_ABS_INF_;
   // TODO: se2
   // TODO: z axis pointing down
 
-
   // bookkeeping
-  cv::Mat1b visualization;
 
 protected:
   template<typename PointType>
@@ -307,7 +374,8 @@ public:
 
     bev_ = cv::Mat::ones(cfg_.n_row_, cfg_.n_col_, CV_32F) * (-VAL_ABS_INF_);
 //    std::cout << bev_ << std::endl;
-    c_height_position_ = std::vector<std::vector<V2F>>(cfg_.n_row_, std::vector<V2F>(cfg_.n_col_, V2F::Zero()));
+//    pillar_pos2f_.clear();
+//    bev_pixfs_.reserve(int(cfg_.n_col_ * cfg_.n_row_ * 0.05));
     cont_views_.resize(cfg_.lv_grads_.size());
     layer_cell_cnt_.resize(cfg_.lv_grads_.size());
     layer_keys_.resize(cfg_.lv_grads_.size());
@@ -323,6 +391,8 @@ public:
     CHECK(ptr_gapc);
     CHECK_GT(ptr_gapc->size(), 10);
 
+    int cell_count = 0;
+    std::map<int, Pixelf> tmp_pillars;
     // Downsample before using?
     for (const auto &pt: ptr_gapc->points) {
       std::pair<int, int> rc = hashPointToImage<PointType>(pt);
@@ -330,30 +400,74 @@ public:
         float height = cfg_.lidar_height_ + pt.z;
         if (bev_(rc.first, rc.second) < height) {
           bev_(rc.first, rc.second) = height;
-          c_height_position_[rc.first][rc.second] = pointToContRowCol(V2F(pt.x, pt.y));  // same coord as row and col
+          V2F coor_f = pointToContRowCol(V2F(pt.x, pt.y));  // same coord as row and col
+//          pillar_pos2f_[rc.first * cfg_.n_col_ + rc.second] = coor_f;
+          tmp_pillars[rc.first * cfg_.n_col_ + rc.second] = Pixelf(coor_f.x(), coor_f.y(), height);
+
         }
         max_bin_val_ = max_bin_val_ < height ? height : max_bin_val_;
         min_bin_val_ = min_bin_val_ > height ? height : min_bin_val_;
       }
     }
+    bev_pixfs_.clear();
+    bev_pixfs_.insert(bev_pixfs_.begin(), tmp_pillars.begin(), tmp_pillars.end());
+//    bev_pixfs_.shrink_to_fit();
+//    std::sort(bev_pixfs_.begin(), bev_pixfs_.end());  // std::map is ordered by definition
+
     printf("Max/Min bin height: %f %f\n", max_bin_val_, min_bin_val_);
     if (!str_id.empty())
       str_id_ = std::move(str_id);
     else
       str_id_ = std::to_string(ptr_gapc->header.stamp);
 
+//    printf("Continuous Pos size: %lu\n", pillar_pos2f_.size());
+    printf("Continuous Pos size: %lu\n", bev_pixfs_.size());
+
+//    size_t sizeInBytes = bev_.total() * bev_.elemSize();
+//    std::cout << "bev size byte: " << sizeInBytes<< std::endl;
+
     cv::Mat mask, view;
     inRange(bev_, cv::Scalar::all(0), cv::Scalar::all(max_bin_val_), mask);
     normalize(bev_, view, 0, 255, cv::NORM_MINMAX, -1, mask);
-    cv::imwrite("cart_context-" + str_id_ + ".png", view);
+    std::string dir = std::string(PJSRCDIR) + "/results/bev_img/";
+    cv::imwrite(dir + "cart_context-" + str_id_ + ".png", view);
+  }
+
+  void clearImage() {
+    bev_.release();
+  }
+
+  void resumeImage() {
+    bev_ = cv::Mat::ones(cfg_.n_row_, cfg_.n_col_, CV_32F) * (-VAL_ABS_INF_);
+    for (const auto &pillar: bev_pixfs_) {
+      int rr = pillar.first / cfg_.n_col_;
+      int cc = pillar.first % cfg_.n_col_;
+      DCHECK_LT(rr, cfg_.n_row_);
+      DCHECK_LT(cc, cfg_.n_col_);
+      bev_(rr, cc) = pillar.second.elev;
+    }
+  }
+
+  cv::Mat1f getBevImage() const {
+    if (bev_.empty()) {
+      cv::Mat1f tmp = cv::Mat::ones(cfg_.n_row_, cfg_.n_col_, CV_32F) * (-VAL_ABS_INF_);
+      for (const auto &pillar: bev_pixfs_) {
+        int rr = pillar.first / cfg_.n_col_;
+        int cc = pillar.first % cfg_.n_col_;
+        DCHECK_LT(rr, cfg_.n_row_);
+        DCHECK_LT(cc, cfg_.n_col_);
+        tmp(rr, cc) = pillar.second.elev;
+      }
+      return tmp;
+    } else
+      return bev_.clone();
   }
 
   void makeContoursRecurs() {
-    cv::Rect full_bev(0, 0, bev_.cols, bev_.rows);
-    visualization = cv::Mat::zeros(cfg_.n_row_, cfg_.n_col_, CV_8U);
+    cv::Rect full_bev_roi(0, 0, bev_.cols, bev_.rows);
 
     TicToc clk;
-    makeContourRecursiveHelper(full_bev, cv::Mat1b(1, 1), 0, nullptr);
+    makeContourRecursiveHelper(full_bev_roi, cv::Mat1b(1, 1), 0, nullptr);
     std::cout << "Time makecontour: " << clk.toc() << std::endl;
 
     for (int i = 0; i < cont_views_.size(); i++) {
@@ -448,58 +562,78 @@ public:
     /// case 2: new key making: from a pivot contour
     const int piv_firsts = 6;
     const int dist_firsts = 10;
+    const float roi_radius = 10.0f;
+    const int roi_radius_padded = std::ceil(roi_radius + 1);
     for (int ll = 0; ll < cfg_.lv_grads_.size(); ll++) {
 //      cv::Mat mask;
 //      cv::threshold(bev_, mask, cfg_.lv_grads_[ll], 123,
 //                    cv::THRESH_TOZERO); // mask is same type and dimension as bev_
       int accumulate_cell_cnt = 0;
-      for (int i = 0; i < piv_firsts; i++) {
+      for (int seq = 0; seq < piv_firsts; seq++) {
         RetrievalKey key;
         key.setZero();
 
-        BCI bci(i, ll);
+        BCI bci(seq, ll);
 
-        if (cont_views_[ll].size() > i)
-          accumulate_cell_cnt += cont_views_[ll][i]->cell_cnt_;
+        if (cont_views_[ll].size() > seq)
+          accumulate_cell_cnt += cont_views_[ll][seq]->cell_cnt_;
 
-        if (cont_views_[ll].size() > i && cont_views_[ll][i]->cell_cnt_ >= cfg_.min_cont_key_cnt_) {
+        if (cont_views_[ll].size() > seq && cont_views_[ll][seq]->cell_cnt_ >= cfg_.min_cont_key_cnt_) {
 
-          V2F v_cen = cont_views_[ll][i]->pos_mean_.cast<float>();
+          V2F v_cen = cont_views_[ll][seq]->pos_mean_.cast<float>();
           int r_cen = int(v_cen.x()), c_cen = int(v_cen.y());
-          int r_min = std::max(0, r_cen - 10), r_max = std::min(cfg_.n_row_ - 1, r_cen + 10);
-          int c_min = std::max(0, c_cen - 10), c_max = std::min(cfg_.n_col_ - 1, c_cen + 10);
+          int r_min = std::max(0, r_cen - roi_radius_padded),
+              r_max = std::min(cfg_.n_row_ - 1, r_cen + roi_radius_padded);
+          int c_min = std::max(0, c_cen - roi_radius_padded),
+              c_max = std::min(cfg_.n_col_ - 1, c_cen + roi_radius_padded);
 
           int num_bins = 7;
-          KeyFloatType bin_len = 10.0 / num_bins;
+          KeyFloatType bin_len = roi_radius / num_bins;
           std::vector<KeyFloatType> ring_bins(num_bins, 0);
 
           int div_per_bin = 5;
           std::vector<KeyFloatType> discrete_divs(div_per_bin * num_bins, 0);
-          KeyFloatType div_len = 10.0 / (num_bins * div_per_bin);
+          KeyFloatType div_len = roi_radius / (num_bins * div_per_bin);
           int cnt_point = 0;
 
-          ContourView cv_tmp(ll, cfg_.lv_grads_[ll], 999.9, cv::Rect(), nullptr); // for case 3
+          RunningStatRecorder rec_tmp; // for case 3
 
           for (int rr = r_min; rr <= r_max; rr++) {
             for (int cc = c_min; cc <= c_max; cc++) {
-              KeyFloatType dist = (c_height_position_[rr][cc] - v_cen).norm();
+              if (bev_(rr, cc) < cfg_.lv_grads_[ll])
+                continue;
+
+              int q_hash = rr * cfg_.n_col_ + cc;
+              std::pair<int, Pixelf> sear_res = search_vec<Pixelf>(bev_pixfs_, 0, bev_pixfs_.size() - 1,
+                                                                   q_hash);
+              DCHECK_EQ(sear_res.first, q_hash);
+              KeyFloatType dist = (V2F(sear_res.second.row_f, sear_res.second.col_f) - v_cen).norm();
+
+//              KeyFloatType dist = (pillar_pos2f_.at(rr * cfg_.n_col_ + cc) - v_cen).norm();
 
               // case 1: ring, height, 7
-//              if (dist < 10 - 1e-2 && bev_(rr, cc) > cfg_.lv_grads_[0]) {  // add gaussian to bins
+//              if (dist < roi_radius - 1e-2 && bev_(rr, cc) > cfg_.lv_grads_[0]) {  // add gaussian to bins
 //                int bin_idx = int(dist / bin_len);
 //                ring_bins[bin_idx] += bev_(rr, cc);    // no gaussian
 //              }
 
               // case 2: gmm, normalized
-              if (dist < 10 - 1e-2 && bev_(rr, cc) > cfg_.lv_grads_[ll]) {
+              if (dist < roi_radius - 1e-2 && bev_(rr, cc) > cfg_.lv_grads_[ll]) {
+                int higher_cnt = 1; // number of levels spanned by this pixel
+                for (int ele = ll + 1; ele < cfg_.lv_grads_.size(); ele++)
+                  if (bev_(rr, cc) > cfg_.lv_grads_[ele])
+                    higher_cnt++;
+
                 cnt_point++;
                 for (int div_idx = 0; div_idx < num_bins * div_per_bin; div_idx++)
-                  discrete_divs[div_idx] += gaussPDF<KeyFloatType>(div_idx * div_len + 0.5 * div_len, dist, 1.0);
+                  discrete_divs[div_idx] +=
+                      higher_cnt * gaussPDF<KeyFloatType>(div_idx * div_len + 0.5 * div_len, dist, 1.0);
               }
 
 //              // case 3: using another ellipse
-//              if (dist < 10 - 1e-2 && bev_(rr, cc) > cfg_.lv_grads_[ll]) {
-//                cv_tmp.runningStatsF(c_height_position_[rr][cc].x(), c_height_position_[rr][cc].y(), bev_(rr, cc));
+//              if (dist < roi_radius - 1e-2 && bev_(rr, cc) > cfg_.lv_grads_[ll]) {
+//                auto pos2f = pillar_pos2f_.at(rr * cfg_.n_col_ + cc);
+//                rec_tmp.runningStatsF(pos2f.x(), pos2f.y(), bev_(rr, cc));
 //              }
 
             }
@@ -514,22 +648,23 @@ public:
           }
 
 //          // case 3: using another ellipse
-//          cv_tmp.calcStatVals();
+//          ContourView cv_tmp(ll, 0, 0, nullptr); // for case 3
+//          cv_tmp.calcStatVals(rec_tmp);
 
 
 
           // TODO: make the key generation from one contour more distinctive
-//          key(0) = std::sqrt(cont_views_[ll][i]->eig_vals_(1));  // max eigen value
-//          key(1) = std::sqrt(cont_views_[ll][i]->eig_vals_(0));  // min eigen value
-//          key(2) = (cont_views_[ll][i]->pos_mean_ - cont_views_[ll][i]->com_).norm();
+//          key(0) = std::sqrt(cont_views_[ll][seq]->eig_vals_(1));  // max eigen value
+//          key(1) = std::sqrt(cont_views_[ll][seq]->eig_vals_(0));  // min eigen value
+//          key(2) = (cont_views_[ll][seq]->pos_mean_ - cont_views_[ll][seq]->com_).norm();
 
           key(0) =
-              std::sqrt(cont_views_[ll][i]->eig_vals_(1) * cont_views_[ll][i]->cell_cnt_);  // max eigen value * cnt
+              std::sqrt(cont_views_[ll][seq]->eig_vals_(1) * cont_views_[ll][seq]->cell_cnt_);  // max eigen value * cnt
           key(1) =
-              std::sqrt(cont_views_[ll][i]->eig_vals_(0) * cont_views_[ll][i]->cell_cnt_);  // min eigen value * cnt
-//          key(2) = (cont_views_[ll][i]->pos_mean_ - cont_views_[ll][i]->com_).norm() *
-//                   std::sqrt(cont_views_[ll][i]->cell_cnt_);
-//                   (cont_views_[ll][i]->cell_cnt_);
+              std::sqrt(cont_views_[ll][seq]->eig_vals_(0) * cont_views_[ll][seq]->cell_cnt_);  // min eigen value * cnt
+//          key(2) = (cont_views_[ll][seq]->pos_mean_ - cont_views_[ll][seq]->com_).norm() *
+//                   std::sqrt(cont_views_[ll][seq]->cell_cnt_);
+//                   (cont_views_[ll][seq]->cell_cnt_);
           key(2) = std::sqrt(accumulate_cell_cnt);
 
 
@@ -542,16 +677,16 @@ public:
           }
 
 //          // case 3:
-//          key(3) = std::sqrt(cont_views_[ll][i]->cell_cnt_);
+//          key(3) = std::sqrt(cont_views_[ll][seq]->cell_cnt_);
 //
 //          key(4) = std::sqrt(cv_tmp.eig_vals_(1) * cv_tmp.cell_cnt_);
 //          key(5) = std::sqrt(cv_tmp.eig_vals_(0) * cv_tmp.cell_cnt_);
 //          key(6) = (cv_tmp.pos_mean_ - cv_tmp.com_).norm() * cv_tmp.cell_cnt_;
 //          key(7) = std::sqrt(cv_tmp.cell_cnt_);
 //
-//          V2D cc_line = cont_views_[ll][i]->pos_mean_ - cv_tmp.pos_mean_;
+//          V2D cc_line = cont_views_[ll][seq]->pos_mean_ - cv_tmp.pos_mean_;
 //          key(8) = cc_line.norm();
-//          key(9) = std::sqrt(std::abs(cv_tmp.cell_cnt_ - cont_views_[ll][i]->cell_cnt_));
+//          key(9) = std::sqrt(std::abs(cv_tmp.cell_cnt_ - cont_views_[ll][seq]->cell_cnt_));
 
 
 
@@ -560,9 +695,9 @@ public:
           for (int bl = 0; bl < NUM_BIN_KEY_LAYER; bl++) {
             int bit_offset = bl * BITS_PER_LAYER;
             for (int j = 0; j < std::min(dist_firsts, (int) cont_views_[DIST_BIN_LAYERS[bl]].size()); j++) {
-              if (j != i) {
-                V2D vec_cc =
-                    cont_views_[DIST_BIN_LAYERS[bl]][j]->pos_mean_ - cont_views_[ll][i]->pos_mean_;
+              if (j != seq) {
+                V2F vec_cc =
+                    cont_views_[DIST_BIN_LAYERS[bl]][j]->pos_mean_ - cont_views_[ll][seq]->pos_mean_;
                 float tmp_dist = vec_cc.norm();
 
                 if (tmp_dist > (BITS_PER_LAYER - 1) * 1.01 + 5.43 - 1e-3 // the last bit of layer sector is always 0
@@ -571,16 +706,38 @@ public:
 
                 float tmp_orie = std::atan2(vec_cc.y(), vec_cc.x());
                 int dist_idx = std::min(std::floor((tmp_dist - 5.43) / 1.01), BITS_PER_LAYER - 1.0) + bit_offset;
+                DCHECK_LT(dist_idx, BITS_PER_LAYER * NUM_BIN_KEY_LAYER);
                 bci.dist_bin_.set(dist_idx, true);
-                bci.dist_bit_neighbors_[dist_idx].emplace_back(DIST_BIN_LAYERS[bl], j, tmp_dist, tmp_orie);
+//                bci.dist_bit_neighbors_[dist_idx].emplace_back(DIST_BIN_LAYERS[bl], j, tmp_dist, tmp_orie);
+                bci.nei_pts_.emplace_back(DIST_BIN_LAYERS[bl], j, dist_idx, tmp_dist, tmp_orie);
               }
             }
           }
 
+          if (!bci.nei_pts_.empty()) {
+            std::sort(bci.nei_pts_.begin(), bci.nei_pts_.end(),
+                      [&](const BCI::RelativePoint &p1, const BCI::RelativePoint &p2) {
+                        return p1.bit_pos < p2.bit_pos;
+                      });
+
+            bci.nei_idx_segs_.emplace_back(0);
+            for (int p1 = 0; p1 < bci.nei_pts_.size(); p1++) {
+              if (bci.nei_pts_[bci.nei_idx_segs_.back()].bit_pos != bci.nei_pts_[p1].bit_pos)
+                bci.nei_idx_segs_.emplace_back(p1);
+            }
+            bci.nei_idx_segs_.emplace_back(bci.nei_pts_.size());
+            DCHECK_EQ(bci.nei_idx_segs_.size(), bci.dist_bin_.count() + 1);
+          }
+
         }
 //        if(key.sum()!=0)
-        layer_key_bcis_[ll].emplace_back(bci);  // even invalid keys are recorded.
+        layer_key_bcis_[ll].emplace_back(bci);  // no validity check on bci. check key before use bci!
         layer_keys_[ll].emplace_back(key);  // even invalid keys are recorded.
+
+//        printf("Key: l%d s%d: ", ll, seq);
+//        for (float &ki: key.array)
+//          printf("%8.4f ", ki);
+//        printf("\n");
       }
     }
 
@@ -605,6 +762,42 @@ public:
     std::string fpath = std::string(PJSRCDIR) + "/results/contours_orig-" + str_id_ + ".txt";
     saveContours(fpath, cont_views_);
 
+    int cnt = 0;
+    printf("Manager data sizes:\n");
+
+    for (const auto &itms: cont_views_)
+      for (const auto &itm: itms)
+        cnt++;
+    printf("cont_views_: %d\n", cnt);
+
+    cnt = 0;
+    for (const auto &itms: layer_keys_)
+      for (const auto &itm: itms)
+        cnt++;
+    printf("layer_keys_: %d\n", cnt);
+
+    cnt = 0;
+    for (const auto &itms: layer_key_bcis_)
+      for (const auto &itm: itms)
+        cnt++;
+    printf("layer_key_bcis_: %d\n", cnt);
+
+    cnt = 0;
+    for (const auto &itms: bev_pixfs_)
+      cnt++;
+    printf("bev_pixfs_: %d\n", cnt);
+
+
+    // ablation study:
+//    bev_.release();
+//    bev_.release();
+//    bev_pixfs_.clear();
+//    cont_views_.clear();
+//    layer_key_bcis_.clear();
+//    layer_keys_.clear();
+
+
+
 //    cv::imwrite("cart_context-mask-" + std::to_string(3) + "-" + str_id_ + "rec.png", visualization);
 //    for (const auto &x: cont_views_) {
 //      printf("level size: %lu\n", x.size());
@@ -621,7 +814,7 @@ public:
           new_cont_views[ll].emplace_back(std::make_shared<ContourView>(*cont_views_[ll][i]));
         else {
           new_cont_views[ll].emplace_back(std::make_shared<ContourView>(
-              ContourView::addContourStat(*new_cont_views[ll].back(), *cont_views_[ll][i])));
+              ContourView::addContourRes(*new_cont_views[ll].back(), *cont_views_[ll][i], view_stat_cfg_)));
         }
       }
     }
@@ -635,12 +828,12 @@ public:
     CHECK_LT(level, cfg_.lv_grads_.size());
     CHECK_LT(pivot, cont_views_[level].size());
     printf("Level %d, pivot No.%d distances:\n", level, pivot);
-    std::vector<std::pair<int, double>> dists;
+    std::vector<std::pair<int, float>> dists;
     for (int i = 0; i < std::min(top_n, (int) cont_views_[level].size()); i++)
       if (i != pivot)
         dists.emplace_back(i, (cont_views_[level][i]->pos_mean_ - cont_views_[level][pivot]->pos_mean_).norm());
 
-    std::sort(dists.begin(), dists.end(), [&](const std::pair<int, double> &a, const std::pair<int, double> &b) {
+    std::sort(dists.begin(), dists.end(), [&](const std::pair<int, float> &a, const std::pair<int, float> &b) {
       return a.second < b.second;
     });
     for (const auto &pr: dists) {
@@ -654,9 +847,9 @@ public:
     CHECK_LT(level, cfg_.lv_grads_.size());
     CHECK_LT(pivot, cont_views_[level].size());
     printf("Level %d, pivot No.%d orientations:\n", level, pivot);
-    std::vector<std::pair<int, double>> bearings;
+    std::vector<std::pair<int, float>> bearings;
     bool first_set = false;
-    V2D vec0(0, 0);
+    V2F vec0(0, 0);
     for (int i = 0; i < std::min(top_n, (int) cont_views_[level].size()); i++) {
       if (i != pivot) {
         if (!first_set) {
@@ -664,14 +857,14 @@ public:
           first_set = true;
           vec0 = (cont_views_[level][i]->pos_mean_ - cont_views_[level][pivot]->pos_mean_).normalized();
         } else {
-          V2D vec1 = (cont_views_[level][i]->pos_mean_ - cont_views_[level][pivot]->pos_mean_).normalized();
-          double ang = std::atan2(vec0.x() * vec1.y() - vec0.y() * vec1.x(), vec0.dot(vec1));
+          V2F vec1 = (cont_views_[level][i]->pos_mean_ - cont_views_[level][pivot]->pos_mean_).normalized();
+          float ang = std::atan2(vec0.x() * vec1.y() - vec0.y() * vec1.x(), vec0.dot(vec1));
           bearings.emplace_back(i, ang);
         }
       }
     }
 
-    std::sort(bearings.begin(), bearings.end(), [&](const std::pair<int, double> &a, const std::pair<int, double> &b) {
+    std::sort(bearings.begin(), bearings.end(), [&](const std::pair<int, float> &a, const std::pair<int, float> &b) {
       return a.second < b.second;
     });
     for (const auto &pr: bearings) {
@@ -692,8 +885,9 @@ public:
 
   cv::Mat getContourImage(int level) const {
     cv::Mat mask;
-    cv::threshold(bev_, mask, cfg_.lv_grads_[level], 123,
+    cv::threshold(getBevImage(), mask, cfg_.lv_grads_[level], 123,
                   cv::THRESH_TOZERO); // mask is same type and dimension as bev_
+
     cv::Mat normalized_layer, mask_u8;
     cv::normalize(mask, normalized_layer, 0, 255, cv::NORM_MINMAX, CV_8U);  // dtype=-1 (default): same type as input
     return normalized_layer;
@@ -778,10 +972,10 @@ public:
 
     // 2. check orientation
     // 2.1 get major axis direction
-    V2D shaft_src(0, 0), shaft_tgt(0, 0);
+    V2F shaft_src(0, 0), shaft_tgt(0, 0);
     for (int i = 1; i < std::min((int) sim_idx.size(), 10); i++) {
       for (int j = 0; j < i; j++) {
-        V2D curr_shaft = src.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_src]->pos_mean_ -
+        V2F curr_shaft = src.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_src]->pos_mean_ -
                          src.cont_views_[cstl[sim_idx[j]].level][cstl[sim_idx[j]].seq_src]->pos_mean_;
         if (curr_shaft.norm() > shaft_src.norm()) {
           shaft_src = curr_shaft.normalized();
@@ -796,9 +990,9 @@ public:
       const auto &sc1 = src.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_src],
           &tc1 = tgt.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_tgt];
       if (sc1->ecc_feat_ && tc1->ecc_feat_) {
-        double theta_s = std::acos(shaft_src.transpose() * sc1->eig_vecs_.col(1));   // acos: [0,pi)
-        double theta_t = std::acos(shaft_tgt.transpose() * tc1->eig_vecs_.col(1));
-        if (diff_delt(theta_s, theta_t, M_PI / 6) && diff_delt(M_PI - theta_s, theta_t, M_PI / 6)) {
+        float theta_s = std::acos(shaft_src.transpose() * sc1->eig_vecs_.col(1));   // acos: [0,pi)
+        float theta_t = std::acos(shaft_tgt.transpose() * tc1->eig_vecs_.col(1));
+        if (diff_delt<float>(theta_s, theta_t, M_PI / 6) && diff_delt<float>(M_PI - theta_s, theta_t, M_PI / 6)) {
           std::swap(sim_idx[i], sim_idx[num_sim - 1]);
           num_sim--;
           continue;
@@ -819,8 +1013,8 @@ public:
     pointset1.resize(2, sim_idx.size());
     pointset2.resize(2, sim_idx.size());
     for (int i = 0; i < sim_idx.size(); i++) {
-      pointset1.col(i) = src.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_src]->pos_mean_;
-      pointset2.col(i) = tgt.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_tgt]->pos_mean_;
+      pointset1.col(i) = src.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_src]->pos_mean_.cast<double>();
+      pointset2.col(i) = tgt.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_tgt]->pos_mean_.cast<double>();
     }
 
     Eigen::Matrix3d T_delta = Eigen::umeyama(pointset1, pointset2, false);
