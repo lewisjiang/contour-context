@@ -84,6 +84,7 @@ struct TreeBucket {
                                                                                    buc_end_(end) {}
 
   size_t getTreeSize() const {
+    DCHECK_EQ(data_tree_.size(), gkidx_tree_.size());
     return data_tree_.size();
   }
 
@@ -327,6 +328,7 @@ struct LayerDB {
       }
       DCHECK_EQ(p_dat + num_to_move, sz1 - 1);
       tr1.data_tree_.resize(p_dat + 1);
+      tr1.gkidx_tree_.resize(p_dat + 1, tr1.gkidx_tree_[0]);
 
       // move buffer: merge and redistribute
       int p1 = 0, p2 = tr1.buffer_.size() - 1, sz_rem;
@@ -416,6 +418,7 @@ struct LayerDB {
       }
       DCHECK_EQ(p_dat + num_to_move, sz2 - 1);
       tr2.data_tree_.resize(p_dat + 1);
+      tr2.gkidx_tree_.resize(p_dat + 1, tr2.gkidx_tree_[0]);
 
       // move buffer: merge and redistribute
       int p1 = 0, p2 = tr2.buffer_.size() - 1, sz_rem;
