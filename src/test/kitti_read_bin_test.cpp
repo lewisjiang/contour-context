@@ -8,6 +8,7 @@
 #include "cont2/contour_mng.h"
 #include "cont2/io_bin.h"
 #include "cont2/contour_db.h"
+#include "cont2/correlation.h"
 
 #include <nav_msgs/Path.h>
 #include <visualization_msgs/MarkerArray.h>
@@ -21,7 +22,7 @@
 
 const std::string PROJ_DIR = std::string(PJSRCDIR);
 
-class KittuBinDataVis {
+class KittiBinDataVis {
   ros::NodeHandle nh;
   ros::Publisher pub_path;
   ros::Publisher pub_index;
@@ -31,7 +32,7 @@ class KittuBinDataVis {
   std::vector<std::pair<int, Eigen::Isometry3d>> gt_poses;
 
 public:
-  explicit KittuBinDataVis(ros::NodeHandle &nh_, std::vector<std::pair<int, Eigen::Isometry3d>> gt_poses_)
+  explicit KittiBinDataVis(ros::NodeHandle &nh_, std::vector<std::pair<int, Eigen::Isometry3d>> gt_poses_)
       : nh(nh_), gt_poses(std::move(gt_poses_)) {
     ros::Time t_curr = ros::Time::now();
     path_msg.header.frame_id = "world";
@@ -107,7 +108,7 @@ int main(int argc, char **argv) {
   ReadKITTILiDAR reader(kitti_raw_dir, date, seq);
 
 //  // visualize gt poses and index
-//  KittuBinDataVis data_test(nh, reader.getGtImuPoses());
+//  KittiBinDataVis data_test(nh, reader.getGtImuPoses());
 //  ros::Rate rate(1);
 //  while (ros::ok()) {
 //    ros::spinOnce();
@@ -143,13 +144,15 @@ int main(int argc, char **argv) {
 
   // test 1. manual compare
   // find the nearest keys in each level:
+  Eigen::Isometry2d T_init;
+  T_init.setIdentity();
   printf("Keys:\n");
   for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
     printf("\nPermu Level %d\n", ll);
     auto keys1 = cmng_ptr_old->getRetrievalKey(ll);
     auto keys2 = cmng_ptr_new->getRetrievalKey(ll);
-    auto bcis1 = cmng_ptr_old->getBCI(ll);
-    auto bcis2 = cmng_ptr_new->getBCI(ll);
+    auto bcis1 = cmng_ptr_old->getLevBCI(ll);
+    auto bcis2 = cmng_ptr_new->getLevBCI(ll);
 
     RetrievalKey final_k1, final_k2;
     int f1 = 0, f2 = 0;
@@ -169,6 +172,8 @@ int main(int argc, char **argv) {
         if (status_code > 10) {
           printf("---\n");
           mat_res = ContourManager::calcScanCorresp(*cmng_ptr_old, *cmng_ptr_new, tmp_pairs, tmp_sim_idx, 5);
+          if (mat_res.second >= 5)
+            T_init = mat_res.first;
           printf("Level %d, key diff sq = %f\nkey1: %2dth: ", ll, tmp_dist, i1);
           for (int key_bit = 0; key_bit < RetrievalKey::SizeAtCompileTime; key_bit++)
             printf("%8.4f\t", k1[key_bit]);
@@ -191,20 +196,20 @@ int main(int argc, char **argv) {
     }
     printf("BF compare key finished\n");
 
-    std::vector<ConstellationPair> constell_pairs;
-    bool is_constell_sim = BCI::checkConstellSim(bcis1[f1], bcis2[f2], constell_pairs) > 0;
-
-    if (is_constell_sim) {
-      printf("Found constell\n");
-
-      std::vector<int> sim_idx;
-      std::pair<Eigen::Isometry2d, int> mat_res = ContourManager::calcScanCorresp(*cmng_ptr_old, *cmng_ptr_new,
-                                                                                  constell_pairs, sim_idx, 5);
-//      std::cout << mat_res.second << std::endl;
-//      std::cout << mat_res.first.matrix() << std::endl;
-    } else {
-      printf("No constellation found\n");
-    }
+//    std::vector<ConstellationPair> constell_pairs;
+//    bool is_constell_sim = BCI::checkConstellSim(bcis1[f1], bcis2[f2], constell_pairs) > 0;
+//
+//    if (is_constell_sim) {
+//      printf("Found constell\n");
+//
+//      std::vector<int> sim_idx;
+//      std::pair<Eigen::Isometry2d, int> mat_res = ContourManager::calcScanCorresp(*cmng_ptr_old, *cmng_ptr_new,
+//                                                                                  constell_pairs, sim_idx, 5);
+////      std::cout << mat_res.second << std::endl;
+////      std::cout << mat_res.first.matrix() << std::endl;
+//    } else {
+//      printf("No constellation found\n");
+//    }
 
 //    printf("Level %d, minimal key diff sq = %f\nkey1: %2dth: ", ll, min_diff, f1);
 //    for (int key_bit = 0; key_bit < RetrievalKey::SizeAtCompileTime; key_bit++)
@@ -240,6 +245,33 @@ int main(int argc, char **argv) {
 //  cmng_ptr_old->expShowBearing(3, 3, 10);
 //  cmng_ptr_new->expShowBearing(3, 3, 10);
 
+  // test 4. calculate GMM L2 optimization using ceres
+  ConstellCorrelationConfig gmm_config;
+
+// For int idx_old = 1561, idx_new = 2576;
+//  Transform matrix:
+//  0.0760232 -0.997106   142.958
+//  0.997106 0.0760232  -4.46818
+//  0         0         1
+
+  ConstellCorrelationConfig corr_cfg;
+  ConstellCorrelation corr_est(corr_cfg);
+
+  // optimize
+  corr_est.calcCorrelation(*cmng_ptr_old, *cmng_ptr_new, T_init);
+
+  // eval with gt:
+  const auto gt_poses = reader.getGtImuPoses();
+  Eigen::Isometry3d gt_pose_old, gt_pose_new;
+  for (auto &itm: gt_poses) {
+    if (itm.first == idx_old)
+      gt_pose_old = itm.second;
+    else if (itm.first == idx_new)
+      gt_pose_new = itm.second;
+  }
+
+  std::cout << gt_pose_old.matrix() << std::endl;
+  std::cout << gt_pose_new.matrix() << std::endl;
 
   return 0;
 }

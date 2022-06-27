@@ -45,8 +45,8 @@ public:
 };
 
 struct TreeBucketConfig {
-  double max_elapse_ = 10.0;  // the max spatial/temporal delay before adding to the trees
-  double min_elapse_ = 5.0;  // the min spatial/temporal delay to wait before adding to the trees
+  double max_elapse_ = 20.0;  // the max spatial/temporal delay before adding to the trees
+  double min_elapse_ = 10.0;  // the min spatial/temporal delay to wait before adding to the trees
 };
 
 struct IndexOfKey {  // where does the key come from? 1) global idx, 2) level, 3) ith/seq at that level
@@ -60,16 +60,16 @@ struct IndexOfKey {  // where does the key come from? 1) global idx, 2) level, 3
 struct TreeBucket {
 
 
-  struct BufferTriplet {
+  struct RetrTriplet {  // retrieval triplet
     RetrievalKey pt;
     double ts{};
     IndexOfKey iok;
 
-//    BufferTriplet() = default;
+//    RetrTriplet() = default;
 
-    BufferTriplet(const RetrievalKey &_a, double _b, size_t g, int l, int s) : pt(_a), ts(_b), iok(g, l, s) {}
+    RetrTriplet(const RetrievalKey &_a, double _b, size_t g, int l, int s) : pt(_a), ts(_b), iok(g, l, s) {}
 
-    BufferTriplet(const RetrievalKey &_a, double _b, IndexOfKey i) : pt(_a), ts(_b), iok(i) {}
+    RetrTriplet(const RetrievalKey &_a, double _b, IndexOfKey i) : pt(_a), ts(_b), iok(i) {}
   };
 
   const TreeBucketConfig cfg_;
@@ -77,7 +77,7 @@ struct TreeBucket {
   KeyFloatType buc_beg_{}, buc_end_{};  // [beg, end)
   my_vector_of_vectors_t data_tree_;
   std::shared_ptr<my_kd_tree_t> tree_ptr = nullptr;
-  std::vector<BufferTriplet> buffer_;    // ordered, ascending
+  std::vector<RetrTriplet> buffer_;    // ordered, ascending
   std::vector<IndexOfKey> gkidx_tree_;  // global index of ContourManager in the whole database
 
   TreeBucket(const TreeBucketConfig &config, KeyFloatType beg, KeyFloatType end) : cfg_(config), buc_beg_(beg),
@@ -582,46 +582,46 @@ public:
   }
 
   // TODO: 1. query database
-  void queryCandidatesKNN(const ContourManager &q_cont,
-                          std::vector<std::shared_ptr<ContourManager>> &cand_ptrs,
-                          std::vector<KeyFloatType> &dist_sq) const {
+  void queryKNN(const ContourManager &q_cont,
+                std::vector<std::shared_ptr<ContourManager>> &cand_ptrs,
+                std::vector<KeyFloatType> &dist_sq) const {
     cand_ptrs.clear();
     dist_sq.clear();
 
     // for each layer
-    std::vector<std::pair<IndexOfKey, KeyFloatType>> q_container;
+    std::vector<std::pair<IndexOfKey, KeyFloatType>> res_container;
     for (int ll = 0; ll < q_levels_.size(); ll++) {
-      size_t size_beg = q_container.size();
+      size_t size_beg = res_container.size();
       for (const auto &permu_key: q_cont.getRetrievalKey(q_levels_[ll])) {
         if (permu_key.sum() != 0) {
           std::vector<std::pair<IndexOfKey, KeyFloatType>> tmp_res;
 
           layer_db_[ll].layerKNNSearch(permu_key, cfg_.max_candi_per_layer_, cfg_.max_dist_sq_, tmp_res);
-          q_container.insert(q_container.end(), tmp_res.begin(),
-                             tmp_res.end());  // Q:different thres for different levels?
+          res_container.insert(res_container.end(), tmp_res.begin(),
+                               tmp_res.end());  // Q:different thres for different levels?
         }
       }
       // limit number of returned values in layer
-      std::sort(q_container.begin() + size_beg, q_container.end(),
+      std::sort(res_container.begin() + size_beg, res_container.end(),
                 [&](const std::pair<IndexOfKey, KeyFloatType> &a, const std::pair<IndexOfKey, KeyFloatType> &b) {
                   return a.second < b.second;
                 });
-      if (q_container.size() > cfg_.max_candi_per_layer_ + size_beg)
-        q_container.resize(cfg_.max_candi_per_layer_ + size_beg, q_container[0]);
+      if (res_container.size() > cfg_.max_candi_per_layer_ + size_beg)
+        res_container.resize(cfg_.max_candi_per_layer_ + size_beg, res_container[0]);
 
     }
 
 //    // limit number of returned values as whole
-//    std::sort(q_container.begin(), q_container.end(),
+//    std::sort(res_container.begin(), res_container.end(),
 //              [&](const std::pair<size_t, KeyFloatType> &a, const std::pair<size_t, KeyFloatType> &b) {
 //                return a.second < b.second;
 //              });
-//    if (q_container.size() > cfg_.max_total_candi_)
-//      q_container.resize(cfg_.max_total_candi_);
+//    if (res_container.size() > cfg_.max_total_candi_)
+//      res_container.resize(cfg_.max_total_candi_);
 
     std::set<size_t> used_gidx;
     printf("Query dists_sq: ");
-    for (const auto &res: q_container) {
+    for (const auto &res: res_container) {
       if (used_gidx.find(res.first.gidx) == used_gidx.end()) {
         used_gidx.insert(res.first.gidx);
         cand_ptrs.emplace_back(all_bevs_[res.first.gidx]);
@@ -638,11 +638,11 @@ public:
 
   }
 
-  // TODO: unlike queryCandidatesKNN, this one directly calculates relative transform and requires no post processing
+  // TODO: unlike queryKNN, this one directly calculates relative transform and requires no post processing
   //  outside the function. The returned cmng are the matched ones.
-  void queryCandidatesRange(const ContourManager &q_cont,
-                            std::vector<std::shared_ptr<ContourManager>> &cand_ptrs,
-                            std::vector<KeyFloatType> &dist_sq) const {
+  void queryRangedKNN(const ContourManager &q_cont,
+                      std::vector<std::shared_ptr<ContourManager>> &cand_ptrs,
+                      std::vector<KeyFloatType> &dist_sq) const {
     cand_ptrs.clear();
     dist_sq.clear();
 
@@ -652,7 +652,7 @@ public:
     // for each layer
     std::set<size_t> matched_gidx;
     for (int ll = 0; ll < q_levels_.size(); ll++) {
-      std::vector<BCI> q_bcis = q_cont.getBCI(q_levels_[ll]);
+      std::vector<BCI> q_bcis = q_cont.getLevBCI(q_levels_[ll]);
       std::vector<RetrievalKey> q_keys = q_cont.getRetrievalKey(q_levels_[ll]);
       DCHECK_EQ(q_bcis.size(), q_keys.size());
       for (int seq = 0; seq < q_bcis.size(); seq++) {
@@ -681,7 +681,8 @@ public:
                                (q_keys[seq][2] - key_bounds[2][1]) * (q_keys[seq][2] - key_bounds[2][1]));
           printf("Dist ub: %f\n", dist_ub);
 
-          layer_db_[ll].layerKNNSearch(q_keys[seq], 100, dist_ub, tmp_res);
+//          layer_db_[ll].layerKNNSearch(q_keys[seq], 100, dist_ub, tmp_res);
+          layer_db_[ll].layerKNNSearch(q_keys[seq], 50, dist_ub, tmp_res);
 //          layer_db_[ll].layerKNNSearch(q_keys[seq], 200, 2000.0, tmp_res);
           t1 += clk.toc();
 

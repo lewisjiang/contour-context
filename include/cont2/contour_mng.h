@@ -312,6 +312,7 @@ class ContourManager {
 
   // data
   std::vector<std::vector<std::shared_ptr<ContourView>>> cont_views_;  // TODO: use a parallel vec of vec for points?
+  std::vector<std::vector<float>> cont_perc_;  // the area percentage of the contour in its layer
   std::vector<int> layer_cell_cnt_;  // total number of cells in each layer/level
   std::vector<std::vector<RetrievalKey>> layer_keys_;  // the key of each layer
   std::vector<std::vector<BCI>> layer_key_bcis_;  // NOTE: No validity check on bci. Check key before using corresponding bci!
@@ -377,6 +378,8 @@ public:
 //    pillar_pos2f_.clear();
 //    bev_pixfs_.reserve(int(cfg_.n_col_ * cfg_.n_row_ * 0.05));
     cont_views_.resize(cfg_.lv_grads_.size());
+    cont_perc_.resize(cfg_.lv_grads_.size());
+
     layer_cell_cnt_.resize(cfg_.lv_grads_.size());
     layer_keys_.resize(cfg_.lv_grads_.size());
     layer_key_bcis_.resize(cfg_.lv_grads_.size());
@@ -391,6 +394,7 @@ public:
     CHECK(ptr_gapc);
     CHECK_GT(ptr_gapc->size(), 10);
 
+    TicToc clk;
     int cell_count = 0;
     std::map<int, Pixelf> tmp_pillars;
     // Downsample before using?
@@ -411,6 +415,8 @@ public:
     }
     bev_pixfs_.clear();
     bev_pixfs_.insert(bev_pixfs_.begin(), tmp_pillars.begin(), tmp_pillars.end());
+    std::cout << "Time makebev: " << clk.toc() << std::endl;
+
 //    bev_pixfs_.shrink_to_fit();
 //    std::sort(bev_pixfs_.begin(), bev_pixfs_.end());  // std::map is ordered by definition
 
@@ -470,14 +476,19 @@ public:
     makeContourRecursiveHelper(full_bev_roi, cv::Mat1b(1, 1), 0, nullptr);
     std::cout << "Time makecontour: " << clk.toc() << std::endl;
 
-    for (int i = 0; i < cont_views_.size(); i++) {
-      std::sort(cont_views_[i].begin(), cont_views_[i].end(),
+    for (int ll = 0; ll < cont_views_.size(); ll++) {
+      std::sort(cont_views_[ll].begin(), cont_views_[ll].end(),
                 [&](const std::shared_ptr<ContourView> &p1, const std::shared_ptr<ContourView> &p2) -> bool {
                   return p1->cell_cnt_ > p2->cell_cnt_;
                 });   // bigger contours first. Or heavier first?
-      layer_cell_cnt_[i] = 0;
-      for (int j = 0; j < cont_views_[i].size(); j++) {
-        layer_cell_cnt_[i] += cont_views_[i][j]->cell_cnt_;
+      layer_cell_cnt_[ll] = 0;
+      for (int j = 0; j < cont_views_[ll].size(); j++) {
+        layer_cell_cnt_[ll] += cont_views_[ll][j]->cell_cnt_;
+      }
+
+      cont_perc_[ll].reserve(cont_views_[ll].size());
+      for (int j = 0; j < cont_views_[ll].size(); j++) {
+        cont_perc_[ll].push_back(cont_views_[ll][j]->cell_cnt_ * 1.0f / layer_cell_cnt_[ll]);
       }
     }
 
@@ -645,6 +656,7 @@ public:
               ring_bins[b] += discrete_divs[b * div_per_bin + d];
             }
             ring_bins[b] *= bin_len / std::sqrt(cnt_point);
+//            ring_bins[b] *= bin_len;  // almost no performance degradation compared with the above one
           }
 
 //          // case 3: using another ellipse
@@ -893,10 +905,6 @@ public:
     return normalized_layer;
   }
 
-  inline ContourManagerConfig getConfig() const {
-    return cfg_;
-  }
-
   // TODO: get retrieval key of a scan
   const std::vector<RetrievalKey> &getRetrievalKey(int level) const {
     DCHECK_GE(level, 0);
@@ -911,8 +919,21 @@ public:
     return layer_keys_[level][seq];
   }
 
+  // get contour
+  inline const std::vector<std::shared_ptr<ContourView>> &getLevContours(int level) const {
+    DCHECK_GE(level, 0);
+    DCHECK_GT(cont_views_.size(), level);
+    return cont_views_[level];
+  }
+
+  inline int getLevTotalPix(int level) const {
+    DCHECK_GE(level, 0);
+    DCHECK_GT(cont_views_.size(), level);
+    return layer_cell_cnt_[level];
+  }
+
   // get bci
-  const std::vector<BCI> &getBCI(int level) const {
+  const std::vector<BCI> &getLevBCI(int level) const {
     DCHECK_GE(level, 0);
     DCHECK_GT(cont_views_.size(), level);
     return layer_key_bcis_[level];
@@ -925,12 +946,22 @@ public:
     return layer_key_bcis_[level][seq];
   }
 
+  const int getLevCnt(int level) const {
+    DCHECK_GE(level, 0);
+    DCHECK_GT(layer_cell_cnt_.size(), level);
+    return layer_cell_cnt_[level];
+  }
+
   inline std::string getStrID() const {
     return str_id_;
   }
 
   inline int getIntID() const {
     return int_id_;
+  }
+
+  inline const ContourManagerConfig &getConfig() const {
+    return cfg_;
   }
 
   // TODO: check if contours in two scans can be accepted as from the same heatmap, and return the transform
@@ -1024,6 +1055,18 @@ public:
       printf("\tlev %d, src:tgt  %d: %d\n", cstl[i].level, cstl[i].seq_src, cstl[i].seq_tgt);
     }
     std::cout << "Transform matrix:\n" << T_delta << std::endl;
+
+    // get the percentage of points used in match v. total area of each level.
+    std::vector<float> level_perc_used_src(src.cfg_.lv_grads_.size(), 0);
+    std::vector<float> level_perc_used_tgt(tgt.cfg_.lv_grads_.size(), 0);
+    for (int i: sim_idx) {
+      level_perc_used_src[cstl[i].level] += src.cont_perc_[cstl[i].level][cstl[i].seq_src];
+      level_perc_used_tgt[cstl[i].level] += tgt.cont_perc_[cstl[i].level][cstl[i].seq_tgt];
+    }
+    printf("Percentage used in constellation:\n");
+    for (int i = 0; i < src.cfg_.lv_grads_.size(); i++) {
+      printf("lev: %d, src: %4.2f, tgt: %4.2f\n", i, level_perc_used_src[i], level_perc_used_tgt[i]);
+    }
 
 //    ret.second = true;
     ret.second = sim_idx.size();

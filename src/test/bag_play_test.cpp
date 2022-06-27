@@ -35,6 +35,7 @@ class RosBagPlayLoopTest {
   tf2_ros::Buffer tfBuffer;
   tf2_ros::TransformListener tfListener;
   int lc_cnt{}, seq_cnt{}, valid_lc_cnt{};
+  int lc_pose_cnt{}, lc_fn_pose_cnt{};
 
   bool time_beg_set = false;
   ros::Time time_beg;
@@ -80,7 +81,7 @@ public:
     tf_gt_last.transform.translation.z += time_translate.z();// elevate 1m per minute
     publishPath(time, tf_gt_last);
 
-    printf("our curr seq: %d, stamp: %lu\n", cnt, time.toNSec());
+    printf("---\nour curr seq: %d, stamp: %lu\n", cnt, time.toNSec());
 
     if (cnt == 1291) {
       printf("Stop here\n");
@@ -95,12 +96,16 @@ public:
 //      cmng_ptr.makeContours();
     cmng_ptr->makeContoursRecurs();
 
+
     // save images of layers
+    TicToc clk;
     for (int i = 0; i < config.lv_grads_.size(); i++) {
       std::string f_name = PROJ_DIR + "/results/layer_img/contour_" + "lv" + std::to_string(i) + "_" +
                            std::to_string(out_ptr->header.stamp) + ".png";
       cmng_ptr->saveContourImage(f_name, i);
     }
+    std::cout << "Time save layers: " << clk.toctic() << std::endl;
+
     cmng_ptr->clearImage();
 //    // case 1: poll over all data
 //    scans.emplace_back(cmng_ptr);
@@ -136,7 +141,7 @@ public:
 //    std::vector<std::shared_ptr<ContourManager>> candidate_loop;
 //    std::vector<KeyFloatType> dists_sq;
 //    TicToc clk_kdsear;
-//    contour_db.queryCandidatesKNN(*cmng_ptr, candidate_loop, dists_sq);
+//    contour_db.queryKNN(*cmng_ptr, candidate_loop, dists_sq);
 //    printf("%lu Candidates in %7.5fs: ", candidate_loop.size(), clk_kdsear.toc());
 //    if (!candidate_loop.empty())
 //      printf(" dist sq from %7.4f to %7.4f\n", dists_sq.front(), dists_sq.back());
@@ -167,9 +172,11 @@ public:
     // 2.1.2 query case 2:
     std::vector<std::shared_ptr<ContourManager>> candidate_loop;
     std::vector<KeyFloatType> dists_sq;
-    TicToc clk_kdsear;
-    contour_db.queryCandidatesRange(*cmng_ptr, candidate_loop, dists_sq);
-    printf("%lu Candidates in %7.5fs: \n", candidate_loop.size(), clk_kdsear.toc());
+    clk.tic();
+    contour_db.queryRangedKNN(*cmng_ptr, candidate_loop, dists_sq);
+    printf("%lu Candidates in %7.5fs: \n", candidate_loop.size(), clk.toc());
+
+    bool has_valid_lc = false;
 
     for (int j = 0; j < candidate_loop.size(); j++) {
       printf("Matching new: %d with old: %d:", cnt, candidate_loop[j]->getIntID());
@@ -179,6 +186,7 @@ public:
       if ((gt_poses[new_lc_pairs.back().first].translation() -
            gt_poses[new_lc_pairs.back().second].translation()).norm() < 4.0) {
         valid_lc_cnt++;
+        has_valid_lc = true;
       }
 
       // write file
@@ -189,18 +197,35 @@ public:
       printf("Image saved: %s-%s\n", cmng_ptr->getStrID().c_str(), candidate_loop[j]->getStrID().c_str());
     }
 
+    if (has_valid_lc)
+      lc_pose_cnt++;
+    else {
+      bool has_fn = false;
+      for (int i = 0; i < cnt - 150; i++) {
+        double dist = (gt_poses[i].translation() - gt_poses[cnt].translation()).norm();
+        if (dist < 4.0) {
+          printf("False Negative: %d-%d, %f\n", i, cnt, dist);
+          has_fn = true;
+        }
+      }
+      if (has_fn)
+        lc_fn_pose_cnt++;
+    }
+
     // 2.2 add new
     contour_db.addScan(cmng_ptr, time.toSec());
     // 2.3 balance
-    TicToc clk_man_tree;
+    clk.tic();
     contour_db.pushAndBalance(seq_cnt++, time.toSec());
-    printf("Rebalance tree cost: %7.5f\n", clk_man_tree.toc());
+    printf("Rebalance tree cost: %7.5f\n", clk.toc());
 
     // plot
     publishLCConnections(new_lc_pairs, time);
     cnt++;
 
     printf("Accumulated valid lc: %d\n", valid_lc_cnt);
+    printf("Accumulated lc poses: %d\n", lc_pose_cnt);
+    printf("Accumulated fn poses: %d\n", lc_fn_pose_cnt);
 
   }
 
@@ -272,7 +297,7 @@ int main(int argc, char **argv) {
   printf("tag 0\n");
   RosBagPlayLoopTest o(nh);
 
-  ros::Rate rate(20);
+  ros::Rate rate(50);
   int cnt = 0;
 
   while (ros::ok()) {

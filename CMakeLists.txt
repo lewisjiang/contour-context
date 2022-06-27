@@ -41,7 +41,8 @@ find_package(OpenCV 4 REQUIRED)
 #find_package(OpenCV REQUIRED)
 #find_package(OpenCV 3 REQUIRED PATHS /home/lewis/.local/install_dir/opencv3.4.6/share NO_DEFAULT_PATH)
 
-find_package(Ceres REQUIRED)
+#find_package(Ceres REQUIRED)
+find_package(Ceres 2 REQUIRED PATHS /home/lewis/.local/install_dir/ceres2.1/usr/local/lib/cmake NO_DEFAULT_PATH)
 
 include_directories(
         include
@@ -71,12 +72,14 @@ add_library(${PROJECT_NAME}contops
         src/cont2/contour.cpp
         src/cont2/contour_mng.cpp
         src/cont2/contour_db.cpp
+        src/cont2/correlation.cpp
         )
 
 target_link_libraries(${PROJECT_NAME}contops
         ${catkin_LIBRARIES}
         ${PCL_LIBRARIES}
         ${glog_LIBRARIES}
+        ${CERES_LIBRARIES}
         )
 
 ### 0. rosbag play test of the project
@@ -88,7 +91,6 @@ target_link_libraries(${PROJECT_NAME}_bag_play_test
         ${glog_LIBRARIES}
         ${catkin_LIBRARIES}
         ${PCL_LIBRARIES}
-        ${CERES_LIBRARIES}
         ${OpenCV_LIBS}
         )
 
