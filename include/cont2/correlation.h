@@ -11,10 +11,11 @@
 #include <utility>
 
 
-struct ConstellCorrelationConfig {
-  float max_corr_dist_ = 10.0; // in bev pixels
-  float min_area_perc_ = 0.80; // minimal percentage of area involved for each layer
+struct GMMOptConfig {
+  double max_corr_dist_ = 10.0; // in bev pixels
+  double min_area_perc_ = 0.95; // minimal percentage of area involved for each layer
   std::vector<int> levels_ = {1, 2, 3, 4}; // the layers to be considered in ellipse gmm.
+  double cov_dilate_scale_ = 4.0;
 };
 
 
@@ -33,9 +34,12 @@ struct GMMPair {
   std::vector<std::vector<GMMEllipse>> ellipses_src, ellipses_tgt;
   std::vector<std::vector<std::pair<int, int>>> selected_pair_idx_;  // selected {src: tgt} pairs for f.g L2 distance calculation
   std::vector<int> src_cell_cnts_, tgt_cell_cnts_;
+  int total_cells_src_ = 0, total_cells_tgt_ = 0;
+  double auto_corr_src_{}, auto_corr_tgt_{};  // without normalization
+  const double scale_;
 
-  GMMPair(const ContourManager &cm_src, const ContourManager &cm_tgt, const ConstellCorrelationConfig &config,
-          const Eigen::Isometry2d &T_init) {
+  GMMPair(const ContourManager &cm_src, const ContourManager &cm_tgt, const GMMOptConfig &config,
+          const Eigen::Isometry2d &T_init) : scale_(config.cov_dilate_scale_) {
     DCHECK_LE(config.levels_.size(), cm_src.getConfig().lv_grads_.size());
 
     // collect eigen values to isolate insignificant correlations
@@ -70,21 +74,48 @@ struct GMMPair {
         max_majax_tgt.back().emplace_back(std::sqrt(view_ptr->eig_vals_.y()));
         cnt_tgt_run += view_ptr->cell_cnt_;
       }
-      src_cell_cnts_.emplace_back(cm_src.getLevCnt(lev));
-      tgt_cell_cnts_.emplace_back(cm_tgt.getLevCnt(lev));
+      src_cell_cnts_.emplace_back(cnt_src_full);
+      tgt_cell_cnts_.emplace_back(cnt_tgt_full);
+      total_cells_src_ += src_cell_cnts_.back();
+      total_cells_tgt_ += tgt_cell_cnts_.back();
     }
 
     // pre select (need initial guess)
+    int total_pairs = 0;
     for (int li = 0; li < ellipses_src.size(); li++) {
       for (int si = 0; si < ellipses_src[li].size(); si++) {
         for (int ti = 0; ti < ellipses_tgt[li].size(); ti++) {
           Eigen::Matrix<double, 2, 1> delta_mu = T_init * ellipses_src[li][si].mu_ - ellipses_tgt[li][ti].mu_;
           if (delta_mu.norm() < 3.0 * (max_majax_src[li][si] + max_majax_tgt[li][ti])) {  // close enough to correlate
             selected_pair_idx_[li].emplace_back(si, ti);
+            total_pairs++;
           }
         }
       }
     }
+    printf("Total pairs of gmm ellipses: %d\n", total_pairs);
+
+    // calc auto-correlation
+    for (int li = 0; li < config.levels_.size(); li++) {
+      for (int i = 0; i < ellipses_src[li].size(); i++) {
+        for (int j = 0; j < ellipses_src[li].size(); j++) {
+          Eigen::Matrix2d new_cov = scale_ * (ellipses_src[li][i].cov_ + ellipses_src[li][j].cov_);
+          Eigen::Vector2d new_mu = ellipses_src[li][i].mu_ - ellipses_src[li][j].mu_;
+          auto_corr_src_ += ellipses_src[li][i].w_ * ellipses_src[li][j].w_ / std::sqrt(new_cov.determinant()) *
+                            std::exp(-0.5 * new_mu.transpose() * new_cov.inverse() * new_mu);
+        }
+      }
+      for (int i = 0; i < ellipses_tgt[li].size(); i++) {
+        for (int j = 0; j < ellipses_tgt[li].size(); j++) {
+          Eigen::Matrix2d new_cov = scale_ * (ellipses_tgt[li][i].cov_ + ellipses_tgt[li][j].cov_);
+          Eigen::Vector2d new_mu = ellipses_tgt[li][i].mu_ - ellipses_tgt[li][j].mu_;
+          auto_corr_tgt_ += ellipses_tgt[li][i].w_ * ellipses_tgt[li][j].w_ / std::sqrt(new_cov.determinant()) *
+                            std::exp(-0.5 * new_mu.transpose() * new_cov.inverse() * new_mu);
+        }
+      }
+    }
+    printf("Auto corr: src: %f, tgt: %f\n", auto_corr_src_, auto_corr_tgt_);
+    printf("Tot cells: src: %d, tgt: %d\n", total_cells_src_, total_cells_tgt_);
   }
 
   // evaluate
@@ -103,8 +134,9 @@ struct GMMPair {
 
     for (int li = 0; li < selected_pair_idx_.size(); li++) {
       for (const auto &pr: selected_pair_idx_[li]) {
+        // TODO: fine tuning: different weights for different levels
         Eigen::Matrix<T, 2, 2> new_cov =
-            R * ellipses_src[li][pr.first].cov_ * R.transpose() + ellipses_tgt[li][pr.second].cov_;
+            scale_ * (R * ellipses_src[li][pr.first].cov_ * R.transpose() + ellipses_tgt[li][pr.second].cov_);
         Eigen::Matrix<T, 2, 1> new_mu = R * ellipses_src[li][pr.first].mu_ + t - ellipses_tgt[li][pr.second].mu_;
 
         T qua = -0.5 * new_mu.transpose() * new_cov.inverse() * new_mu;
@@ -120,29 +152,34 @@ struct GMMPair {
 
 //! Constellation correlation
 class ConstellCorrelation {
-  ConstellCorrelationConfig cfg_;
+  GMMOptConfig cfg_;
 
 public:
   ConstellCorrelation() = default;
 
-  ConstellCorrelation(ConstellCorrelationConfig cfg) : cfg_(std::move(cfg)) {};
+  explicit ConstellCorrelation(GMMOptConfig cfg) : cfg_(std::move(cfg)) {};
 
-  // T_tgt = T_delta * T_src
-  float calcCorrelation(const ContourManager &cm_src, const ContourManager &cm_tgt, const Eigen::Isometry2d &T_init) {
+  // T_tgt (should)= T_delta * T_src
+  double calcCorrelation(const ContourManager &cm_src, const ContourManager &cm_tgt, Eigen::Isometry2d &T_delta) {
     // gmmreg, rigid, 2D.
-    double parameters[3] = {T_init.translation().x(), T_init.translation().y(),
-                            atan2(T_init.rotation()(1, 0),
-                                  T_init.rotation()(0, 0))}; // set according to the constellation output.
+    double parameters[3] = {T_delta.translation().x(), T_delta.translation().y(),
+                            std::atan2(T_delta.rotation()(1, 0),
+                                       T_delta.rotation()(0, 0))}; // set according to the constellation output.
     printf("Param before opt:\n");
     for (auto dat: parameters) {
       std::cout << dat << std::endl;
     }
-    ceres::GradientProblem problem(
-        new ceres::AutoDiffFirstOrderFunction<GMMPair, 3>(new GMMPair(cm_src, cm_tgt, cfg_, T_init)));
+    std::cout << T_delta.matrix() << std::endl;
+
+    std::unique_ptr<GMMPair> ptr_gmm_pair(new GMMPair(cm_src, cm_tgt, cfg_, T_delta));
+//    int total_cells_src = ptr_gmm_pair->total_cells_src_, total_cells_tgt = ptr_gmm_pair->total_cells_tgt_;
+    double auto_corr_src = ptr_gmm_pair->auto_corr_src_, auto_corr_tgt = ptr_gmm_pair->auto_corr_tgt_;
+
+    ceres::GradientProblem problem(new ceres::AutoDiffFirstOrderFunction<GMMPair, 3>(ptr_gmm_pair.release()));
 
     ceres::GradientProblemSolver::Options options;
     options.minimizer_progress_to_stdout = true;
-//  options.max_num_iterations = 8;
+    options.max_num_iterations = 10;
     ceres::GradientProblemSolver::Summary summary;
     ceres::Solve(options, problem, parameters, &summary);
 
@@ -153,13 +190,53 @@ public:
       std::cout << dat << std::endl;
     }
 
-    // TODO: normalize the score according to cell counts, and return the optimized parameter
+    // normalize the score according to cell counts, and return the optimized parameter
+    T_delta.setIdentity();
+    T_delta.rotate(parameters[2]);
+    T_delta.pretranslate(V2D(parameters[0], parameters[1]));
+
+    double correlation = -summary.final_cost / std::sqrt(auto_corr_src * auto_corr_tgt);
+    printf("Correlation: %f\n", correlation);
+    return correlation;
+
   }
 
   // TODO: evaluate metric estimation performance given the 3D gt poses
-  void evalMetricEst(const Eigen::Isometry2d &T_delta, const Eigen::Isometry3d &gt_src_3d,
-                     const Eigen::Isometry3d &gt_tgt_3d) {
+  static Eigen::Isometry2d evalMetricEst(const Eigen::Isometry2d &T_delta, const Eigen::Isometry3d &gt_src_3d,
+                                         const Eigen::Isometry3d &gt_tgt_3d, const ContourManagerConfig &bev_config) {
+    // ignore non-square resolution for now:
+    CHECK_EQ(bev_config.reso_row_, bev_config.reso_col_);
 
+    Eigen::Isometry2d T_so_ssen = Eigen::Isometry2d::Identity(), T_to_tsen;  // {}_sensor in {}_bev_origin frame
+    T_so_ssen.translate(V2D(bev_config.n_row_ / 2 - 0.5, bev_config.n_col_ / 2 - 0.5));
+    T_to_tsen = T_so_ssen;
+    Eigen::Isometry2d T_tsen_ssen2_est = T_to_tsen.inverse() * T_delta * T_so_ssen;
+    T_tsen_ssen2_est.translation() *= bev_config.reso_row_;
+    std::cout << T_tsen_ssen2_est.matrix() << std::endl;
+
+    // Lidar sensor src in the lidar tgt frame, T_wc like.
+    Eigen::Isometry3d T_tsen_ssen3 = gt_tgt_3d.inverse() * gt_src_3d;
+    std::cout << T_tsen_ssen3.matrix() << std::endl;
+
+    // TODO: project gt 3d into some gt 2d, and use
+    Eigen::Isometry2d T_tsen_ssen2_gt;
+    T_tsen_ssen2_gt.setIdentity();
+    // for translation: just the xy difference
+    // for rotation: rotate so that the two z axis align
+    Eigen::Vector3d z0(0, 0, 1);
+    Eigen::Vector3d z1 = T_tsen_ssen3.matrix().block<3, 1>(0, 2);
+    Eigen::Vector3d ax = z0.cross(z1).normalized();
+    double ang = acos(z0.dot(z1));
+    Eigen::AngleAxisd d_rot(-ang, ax);
+
+    Eigen::Matrix3d R_rectified = d_rot.matrix() * T_tsen_ssen3.matrix().topLeftCorner<3, 3>();  // only top 2x2 useful
+    std::cout << "R_rect:\n" << R_rectified << std::endl;
+
+    T_tsen_ssen2_gt.rotate(std::atan2(R_rectified(1, 0), R_rectified(0, 0)));
+    T_tsen_ssen2_gt.pretranslate(Eigen::Vector2d(T_tsen_ssen3.translation().segment(0, 2)));  // only xy
+
+    Eigen::Isometry2d T_gt_est = T_tsen_ssen2_gt.inverse() * T_tsen_ssen2_est;
+    return T_gt_est;
   }
 
 };

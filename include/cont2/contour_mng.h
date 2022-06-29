@@ -928,7 +928,7 @@ public:
 
   inline int getLevTotalPix(int level) const {
     DCHECK_GE(level, 0);
-    DCHECK_GT(cont_views_.size(), level);
+    DCHECK_GT(layer_cell_cnt_.size(), level);
     return layer_cell_cnt_[level];
   }
 
@@ -944,12 +944,6 @@ public:
     DCHECK_GT(cont_views_.size(), level);
     DCHECK_LT(seq, layer_key_bcis_[level].size());
     return layer_key_bcis_[level][seq];
-  }
-
-  const int getLevCnt(int level) const {
-    DCHECK_GE(level, 0);
-    DCHECK_GT(layer_cell_cnt_.size(), level);
-    return layer_cell_cnt_[level];
   }
 
   inline std::string getStrID() const {

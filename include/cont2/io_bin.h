@@ -32,11 +32,47 @@ class ReadKITTILiDAR {
   int max_index_num = 10000;
   int seq_name_len = 10; // ".bin", ".txt" excluded
 
+  // T_imu_velodyne = T_imu_w * T_w_velodyne
+  Eigen::Isometry3d T_imu_velod_;
+
 
 public:
   explicit ReadKITTILiDAR(std::string &kitti_raw_dir, std::string &date, std::string &seq) : kitti_raw_dir_(
       kitti_raw_dir), date_(date), seq_(seq) {
-    //TODO
+    // Read extrinsic
+
+    std::string calib_path = kitti_raw_dir_ + "/" + date_ + "/calib_imu_to_velo.txt";
+    std::fstream calib_file;
+    calib_file.open(calib_path, std::ios::in);
+    if (calib_file.rdstate() != std::ifstream::goodbit) {
+      std::cout << "Cannot open " << calib_path << ", failed to initialize..." << std::endl;
+      return;
+    }
+    Eigen::Quaterniond calib_rot_q;
+    Eigen::Vector3d calib_trans;
+
+    std::string strbuf;
+    while (std::getline(calib_file, strbuf)) {
+      std::istringstream iss(strbuf);
+      std::string pname;
+      if (iss >> pname) {
+        if (pname == "R:") {
+          Eigen::Matrix3d rot_mat;
+          for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+              iss >> rot_mat(i, j);
+          calib_rot_q = Eigen::Quaterniond(rot_mat);
+        } else if (pname == "T:") {
+          for (int i = 0; i < 3; i++)
+            iss >> calib_trans(i);
+        }
+      }
+    }
+    T_imu_velod_.setIdentity();
+    T_imu_velod_.rotate(calib_rot_q);
+    T_imu_velod_.pretranslate(calib_trans);
+
+    // Read gt imu poses
     double scale = 0;
     Eigen::Vector3d trans_orig(0, 0, 0);
     for (int idx = 0; idx < max_index_num; idx++) {
@@ -86,6 +122,10 @@ public:
   // get all gt pose (to display)
   std::vector<std::pair<int, Eigen::Isometry3d>> getGtImuPoses() const {
     return imu_gt_poses_;
+  }
+
+  const Eigen::Isometry3d &get_T_imu_velod() const {
+    return T_imu_velod_;
   }
 
   // get point cloud

@@ -120,6 +120,7 @@ int main(int argc, char **argv) {
 //  int idx_old = 34, idx_new = 2437;
 //  int idx_old = 119, idx_new = 2511;
   int idx_old = 1561, idx_new = 2576;
+//  int idx_old = 805, idx_new = 2576;
 //  int idx_old = 80, idx_new = 2481; // the return to the first turning
   std::string s_old, s_new;
 
@@ -246,7 +247,7 @@ int main(int argc, char **argv) {
 //  cmng_ptr_new->expShowBearing(3, 3, 10);
 
   // test 4. calculate GMM L2 optimization using ceres
-  ConstellCorrelationConfig gmm_config;
+  GMMOptConfig gmm_config;
 
 // For int idx_old = 1561, idx_new = 2576;
 //  Transform matrix:
@@ -254,7 +255,7 @@ int main(int argc, char **argv) {
 //  0.997106 0.0760232  -4.46818
 //  0         0         1
 
-  ConstellCorrelationConfig corr_cfg;
+  GMMOptConfig corr_cfg;
   ConstellCorrelation corr_est(corr_cfg);
 
   // optimize
@@ -262,16 +263,20 @@ int main(int argc, char **argv) {
 
   // eval with gt:
   const auto gt_poses = reader.getGtImuPoses();
+  const auto T_imu_lidar = reader.get_T_imu_velod();
   Eigen::Isometry3d gt_pose_old, gt_pose_new;
   for (auto &itm: gt_poses) {
     if (itm.first == idx_old)
-      gt_pose_old = itm.second;
+      gt_pose_old = itm.second * T_imu_lidar;
     else if (itm.first == idx_new)
-      gt_pose_new = itm.second;
+      gt_pose_new = itm.second * T_imu_lidar;
   }
 
   std::cout << gt_pose_old.matrix() << std::endl;
   std::cout << gt_pose_new.matrix() << std::endl;
+
+  Eigen::Isometry2d T_err_2d = ConstellCorrelation::evalMetricEst(T_init, gt_pose_old, gt_pose_new, config);
+  std::cout << "Error 2d:\n" << T_err_2d.matrix() << std::endl;
 
   return 0;
 }
