@@ -8,6 +8,7 @@
 #include "cont2/contour_mng.h"
 #include <ceres/ceres.h>
 
+#include <memory>
 #include <utility>
 
 
@@ -35,7 +36,7 @@ struct GMMPair {
   std::vector<std::vector<std::pair<int, int>>> selected_pair_idx_;  // selected {src: tgt} pairs for f.g L2 distance calculation
   std::vector<int> src_cell_cnts_, tgt_cell_cnts_;
   int total_cells_src_ = 0, total_cells_tgt_ = 0;
-  double auto_corr_src_{}, auto_corr_tgt_{};  // without normalization
+  double auto_corr_src_{}, auto_corr_tgt_{};  // without normalization by cell count
   const double scale_;
 
   GMMPair(const ContourManager &cm_src, const ContourManager &cm_tgt, const GMMOptConfig &config,
@@ -114,8 +115,8 @@ struct GMMPair {
         }
       }
     }
-    printf("Auto corr: src: %f, tgt: %f\n", auto_corr_src_, auto_corr_tgt_);
-    printf("Tot cells: src: %d, tgt: %d\n", total_cells_src_, total_cells_tgt_);
+//    printf("Auto corr: src: %f, tgt: %f\n", auto_corr_src_, auto_corr_tgt_);
+//    printf("Tot cells: src: %d, tgt: %d\n", total_cells_src_, total_cells_tgt_);
   }
 
   // evaluate
@@ -153,51 +154,71 @@ struct GMMPair {
 //! Constellation correlation
 class ConstellCorrelation {
   GMMOptConfig cfg_;
+  std::unique_ptr<ceres::GradientProblem> problem_ptr;
+  double auto_corr_src{}, auto_corr_tgt{};
+  Eigen::Isometry2d T_best_;
 
 public:
   ConstellCorrelation() = default;
 
-  explicit ConstellCorrelation(GMMOptConfig cfg) : cfg_(std::move(cfg)) {};
+  explicit ConstellCorrelation(GMMOptConfig cfg) : cfg_(std::move(cfg)) {
+    T_best_.setIdentity();
+  };
+
+  // split init cost calc from full optimization, in case of too many candidates
+  double initProblem(const ContourManager &cm_src, const ContourManager &cm_tgt, const Eigen::Isometry2d &T_init) {
+//    printf("Param before opt:\n");
+//    for (auto dat: parameters) {
+//      std::cout << dat << std::endl;
+//    }
+//    std::cout << T_delta.matrix() << std::endl;
+
+    T_best_ = T_init;
+    std::unique_ptr<GMMPair> ptr_gmm_pair(new GMMPair(cm_src, cm_tgt, cfg_, T_init));
+    double parameters[3] = {T_init(0, 2), T_init(1, 2),
+                            std::atan2(T_init(1, 0),
+                                       T_init(0, 0))}; // set according to the constellation output.
+
+    auto_corr_src = ptr_gmm_pair->auto_corr_src_;
+    auto_corr_tgt = ptr_gmm_pair->auto_corr_tgt_;
+    problem_ptr = std::make_unique<ceres::GradientProblem>(
+        new ceres::AutoDiffFirstOrderFunction<GMMPair, 3>(ptr_gmm_pair.release()));
+
+    double cost[1] = {0};
+    problem_ptr->Evaluate(parameters, cost, nullptr);
+    return -cost[0] / std::sqrt(auto_corr_src * auto_corr_tgt);;  // correlation at initial cost
+  }
 
   // T_tgt (should)= T_delta * T_src
-  double calcCorrelation(const ContourManager &cm_src, const ContourManager &cm_tgt, Eigen::Isometry2d &T_delta) {
+  std::pair<double, Eigen::Isometry2d> calcCorrelation() {
+    DCHECK(nullptr != problem_ptr);
     // gmmreg, rigid, 2D.
-    double parameters[3] = {T_delta.translation().x(), T_delta.translation().y(),
-                            std::atan2(T_delta.rotation()(1, 0),
-                                       T_delta.rotation()(0, 0))}; // set according to the constellation output.
-    printf("Param before opt:\n");
-    for (auto dat: parameters) {
-      std::cout << dat << std::endl;
-    }
-    std::cout << T_delta.matrix() << std::endl;
-
-    std::unique_ptr<GMMPair> ptr_gmm_pair(new GMMPair(cm_src, cm_tgt, cfg_, T_delta));
-//    int total_cells_src = ptr_gmm_pair->total_cells_src_, total_cells_tgt = ptr_gmm_pair->total_cells_tgt_;
-    double auto_corr_src = ptr_gmm_pair->auto_corr_src_, auto_corr_tgt = ptr_gmm_pair->auto_corr_tgt_;
-
-    ceres::GradientProblem problem(new ceres::AutoDiffFirstOrderFunction<GMMPair, 3>(ptr_gmm_pair.release()));
+    double parameters[3] = {T_best_(0, 2), T_best_(1, 2),
+                            std::atan2(T_best_(1, 0),
+                                       T_best_(0, 0))}; // set according to the constellation output.
 
     ceres::GradientProblemSolver::Options options;
     options.minimizer_progress_to_stdout = true;
     options.max_num_iterations = 10;
     ceres::GradientProblemSolver::Summary summary;
-    ceres::Solve(options, problem, parameters, &summary);
+    ceres::Solve(options, *problem_ptr, parameters, &summary);
 
     std::cout << summary.FullReport() << "\n";
 
-    printf("Param after opt:\n");
-    for (auto dat: parameters) {
-      std::cout << dat << std::endl;
-    }
+//    printf("Param after opt:\n");
+//    for (auto dat: parameters) {
+//      std::cout << dat << std::endl;
+//    }
 
     // normalize the score according to cell counts, and return the optimized parameter
-    T_delta.setIdentity();
-    T_delta.rotate(parameters[2]);
-    T_delta.pretranslate(V2D(parameters[0], parameters[1]));
+//    Eigen::Isometry2d T_res;
+    T_best_.setIdentity();
+    T_best_.rotate(parameters[2]);
+    T_best_.pretranslate(V2D(parameters[0], parameters[1]));
 
     double correlation = -summary.final_cost / std::sqrt(auto_corr_src * auto_corr_tgt);
-    printf("Correlation: %f\n", correlation);
-    return correlation;
+//    printf("Correlation: %f\n", correlation);
+    return {correlation, T_best_};
 
   }
 
@@ -212,11 +233,11 @@ public:
     T_to_tsen = T_so_ssen;
     Eigen::Isometry2d T_tsen_ssen2_est = T_to_tsen.inverse() * T_delta * T_so_ssen;
     T_tsen_ssen2_est.translation() *= bev_config.reso_row_;
-    std::cout << T_tsen_ssen2_est.matrix() << std::endl;
+//    std::cout << "Estimated src in tgt sensor frame:\n" << T_tsen_ssen2_est.matrix() << std::endl;
 
     // Lidar sensor src in the lidar tgt frame, T_wc like.
     Eigen::Isometry3d T_tsen_ssen3 = gt_tgt_3d.inverse() * gt_src_3d;
-    std::cout << T_tsen_ssen3.matrix() << std::endl;
+//    std::cout << "gt src in tgt sensor frame 3d:\n" << T_tsen_ssen3.matrix() << std::endl;
 
     // TODO: project gt 3d into some gt 2d, and use
     Eigen::Isometry2d T_tsen_ssen2_gt;
@@ -230,7 +251,9 @@ public:
     Eigen::AngleAxisd d_rot(-ang, ax);
 
     Eigen::Matrix3d R_rectified = d_rot.matrix() * T_tsen_ssen3.matrix().topLeftCorner<3, 3>();  // only top 2x2 useful
-    std::cout << "R_rect:\n" << R_rectified << std::endl;
+//    std::cout << "R_rect:\n" << R_rectified << std::endl;
+    CHECK_LT(R_rectified.row(2).norm(), 1 + 1e-3);
+    CHECK_LT(R_rectified.col(2).norm(), 1 + 1e-3);
 
     T_tsen_ssen2_gt.rotate(std::atan2(R_rectified(1, 0), R_rectified(0, 0)));
     T_tsen_ssen2_gt.pretranslate(Eigen::Vector2d(T_tsen_ssen3.translation().segment(0, 2)));  // only xy

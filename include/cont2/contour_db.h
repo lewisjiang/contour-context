@@ -6,6 +6,7 @@
 #define CONT2_CONTOUR_DB_H
 
 #include "cont2/contour_mng.h"
+#include "cont2/correlation.h"
 
 #include <memory>
 #include <algorithm>
@@ -13,6 +14,7 @@
 #include <unordered_set>
 
 #include <nanoflann.hpp>
+#include <utility>
 #include "KDTreeVectorOfVectorsAdaptor.h"
 
 //typedef Eigen::Matrix<KeyFloatType, 4, 1> tree_key_t;
@@ -560,6 +562,188 @@ struct LayerDB {
 
 };
 
+struct CandSimScore {
+  // Our similarity score is multi-dimensional
+  int cnt_constell_ = 0;
+  int cnt_pairwise_sim_ = 0;
+  double correlation_ = 0;
+
+  CandSimScore() = default;
+
+  CandSimScore(int cnt_chk1, int cnt_chk2, double init_corr) : cnt_constell_(cnt_chk1), cnt_pairwise_sim_(cnt_chk2),
+                                                               correlation_(init_corr) {}
+
+  bool operator<(const CandSimScore &a) const {
+    if (cnt_pairwise_sim_ == a.cnt_pairwise_sim_)
+      return correlation_ < a.correlation_;
+    return cnt_pairwise_sim_ < a.cnt_pairwise_sim_;
+  }
+
+  bool operator>(const CandSimScore &a) const {
+    if (cnt_pairwise_sim_ == a.cnt_pairwise_sim_)
+      return correlation_ > a.correlation_;
+    return cnt_pairwise_sim_ > a.cnt_pairwise_sim_;
+  }
+};
+
+
+// definition:
+// 1. given a target/new cm and a multi-dimension similarity threshold, we first feed in, consecutively, all the
+// src/history/old cms that are considered as its loop closure candidates, each with a matching hint in the form of a
+// certain retrieval key (since a cm has many keys) and the key's BCI.
+// 2. When feeding in a given candidate, we progressively calculate and check the similarity score and discard it once
+// any dimension falls below threshold. For a candidate with multiple hints, we choose the "most similar" one before the
+// calculation of any continuous correlation score???.
+// 3. After getting the best of each candidate for all the candidates, we sort them according to ??? and select the top
+// several to further optimize and calculate the correlation score (If all the candidates are required, we optimize them
+// all). All the remaining candidates are predicted as positive, and the user can request "top-1" for protocol 1 and
+// "all" for protocol 2.
+struct CandidateManager {
+  struct CandidateData {
+    std::shared_ptr<const ContourManager> cm_cand_;
+    std::unique_ptr<ConstellCorrelation> corr_est_;
+    Eigen::Isometry2d T_delta_;  // transform candidate into tgt/curr/query/new frame
+    CandSimScore sim_score_;
+  };
+
+  CandSimScore score_lb_;  // score lower bound
+  std::shared_ptr<const ContourManager> cm_tgt_;
+
+  // data structure
+  std::map<int, int> cand_id_pos_pair_;
+  std::vector<CandidateData> candidates_;
+
+  // bookkeeping:
+  bool adding_finished = false;
+  int num_aft_check1 = 0;
+  int num_aft_check2 = 0;
+  int num_aft_check3 = 0;
+  int num_aft_check4 = 0;
+
+  CandidateManager(std::shared_ptr<const ContourManager> cm_q,
+                   const CandSimScore &score_lb) : cm_tgt_(std::move(cm_q)), score_lb_(score_lb) {}
+
+  // "hint": the key pairing and the bci pairing
+  bool checkCandWithHint(const std::shared_ptr<const ContourManager> &cm_cand, const ConstellationPair &anchor_pair) {
+    CHECK(!adding_finished);
+    int cand_id = cm_cand->getIntID();
+    CandSimScore curr_score;
+
+    // check: (1/3) anchor similarity
+    bool anchor_sim = ContourManager::checkContPairSim(*cm_cand, *cm_tgt_, anchor_pair);
+    if (!anchor_sim)
+      return false;
+    num_aft_check1++;
+
+    // check (2/3): pure constellation check
+    std::vector<ConstellationPair> tmp_pairs;
+    int num_constell_pairs = BCI::checkConstellSim(cm_cand->getBCI(anchor_pair.level, anchor_pair.seq_src),
+                                                   cm_tgt_->getBCI(anchor_pair.level, anchor_pair.seq_tgt), tmp_pairs);
+    if (num_constell_pairs < score_lb_.cnt_constell_)
+      return false;
+    curr_score.cnt_constell_ = num_constell_pairs;
+    num_aft_check2++;
+
+    // check (3/3): individual similarity check
+    std::vector<int> tmp_sim_idx;  // the index of contours in tmp_pairs after individual check
+    std::pair<Eigen::Isometry2d, int> mat_res;
+    mat_res = ContourManager::calcScanCorresp(*cm_cand, *cm_tgt_, tmp_pairs, tmp_sim_idx,
+                                              score_lb_.cnt_pairwise_sim_);  // 5: minimal remaining pairs required
+    if (mat_res.second < score_lb_.cnt_pairwise_sim_)
+      return false;
+    curr_score.cnt_pairwise_sim_ = mat_res.second;
+    num_aft_check3++;
+
+    // correlation calculation
+    auto cand_it = cand_id_pos_pair_.find(cand_id);
+    if (cand_it != cand_id_pos_pair_.end() &&
+        curr_score < candidates_[cand_it->second].sim_score_)  // if a better candidate rep exists
+      return false;
+
+    GMMOptConfig gmm_config;
+    std::unique_ptr<ConstellCorrelation> corr_est(new ConstellCorrelation(gmm_config));
+    double corr_score_init = corr_est->initProblem(*cm_cand, *cm_tgt_, mat_res.first);
+    if (corr_score_init < score_lb_.correlation_)
+      return false;
+    num_aft_check4++;
+
+    curr_score.correlation_ = corr_score_init;
+
+    // add to database
+    if (cand_it != cand_id_pos_pair_.end()) {
+      auto &existing_cand = candidates_[cand_it->second];
+      if (curr_score < existing_cand.sim_score_)
+        return false;
+      else {
+        existing_cand.sim_score_ = curr_score;
+        existing_cand.T_delta_ = mat_res.first;
+        existing_cand.cm_cand_ = cm_cand;
+        existing_cand.corr_est_ = std::move(corr_est);
+      }
+    } else {
+      CandidateData new_cand;
+      new_cand.sim_score_ = curr_score;
+      new_cand.T_delta_ = mat_res.first;
+      new_cand.cm_cand_ = cm_cand;
+      new_cand.corr_est_ = std::move(corr_est);
+      cand_id_pos_pair_.insert({cand_id, candidates_.size()});
+      candidates_.emplace_back(std::move(new_cand));
+    }
+
+    return true;
+
+    // TODO: check results of each level when fine tuning for recall:
+//    if (num_aft_check1) {
+//      printf("L:%d S:%d. After check 1: %d\n", q_levels_[ll], seq, num_aft_check1);
+//      printf("L:%d S:%d. After check 2: %d\n", q_levels_[ll], seq, num_aft_check2);
+//      printf("L:%d S:%d. After check 3: %d\n", q_levels_[ll], seq, num_aft_check3);
+//    }
+
+  }
+
+  int
+  fineOptimize(int top_n, std::vector<std::shared_ptr<const ContourManager>> &res_cand, std::vector<double> &res_corr,
+               std::vector<Eigen::Isometry2d> &res_T) {
+    adding_finished = true;
+
+    res_cand.clear();
+    res_corr.clear();
+    res_T.clear();
+
+    if (candidates_.empty())
+      return 0;
+
+    std::sort(candidates_.begin(), candidates_.end(), [&](const CandidateData &d1, const CandidateData &d2) {
+//      return d1.sim_score_ > d2.sim_score_;
+      return d1.sim_score_.correlation_ > d2.sim_score_.correlation_;
+    });
+
+    int ret_size = std::min(top_n, (int) candidates_.size());
+    for (int i = 0; i < ret_size; i++) {
+      auto tmp_res = candidates_[i].corr_est_->calcCorrelation();
+      candidates_[i].sim_score_.correlation_ = tmp_res.first;
+      candidates_[i].T_delta_ = tmp_res.second;
+    }
+
+    std::sort(candidates_.begin(), candidates_.begin() + ret_size,
+              [&](const CandidateData &d1, const CandidateData &d2) {
+//                return d1.sim_score_ > d2.sim_score_;
+                return d1.sim_score_.correlation_ > d2.sim_score_.correlation_;
+              });
+
+    printf("Fine optim corr:\n");
+    for (int i = 0; i < ret_size; i++) {
+      res_cand.emplace_back(candidates_[i].cm_cand_);
+      res_corr.emplace_back(candidates_[i].sim_score_.correlation_);
+      res_T.emplace_back(candidates_[i].T_delta_);
+      printf("correlation: %f\n", candidates_[i].sim_score_.correlation_);
+    }
+
+    return ret_size;
+  }
+
+};
+
 struct ContourDBConfig {
   int num_trees_ = 6;  // max number of trees per layer
   int max_candi_per_layer_ = 40;  // should we use different values for different layers?
@@ -574,86 +758,43 @@ class ContourDB {
   const std::vector<int> q_levels_;
 
   std::vector<LayerDB> layer_db_;
-  std::vector<std::shared_ptr<ContourManager>> all_bevs_;
+  std::vector<std::shared_ptr<const ContourManager>> all_bevs_;
 
 public:
-  ContourDB(const ContourDBConfig &config, const std::vector<int> &q_levels) : cfg_(config), q_levels_(q_levels) {
+  ContourDB(const ContourDBConfig &config, std::vector<int> q_levels) : cfg_(config), q_levels_(std::move(q_levels)) {
     layer_db_.resize(q_levels_.size());
   }
 
   // TODO: 1. query database
   void queryKNN(const ContourManager &q_cont,
-                std::vector<std::shared_ptr<ContourManager>> &cand_ptrs,
-                std::vector<KeyFloatType> &dist_sq) const {
-    cand_ptrs.clear();
-    dist_sq.clear();
-
-    // for each layer
-    std::vector<std::pair<IndexOfKey, KeyFloatType>> res_container;
-    for (int ll = 0; ll < q_levels_.size(); ll++) {
-      size_t size_beg = res_container.size();
-      for (const auto &permu_key: q_cont.getRetrievalKey(q_levels_[ll])) {
-        if (permu_key.sum() != 0) {
-          std::vector<std::pair<IndexOfKey, KeyFloatType>> tmp_res;
-
-          layer_db_[ll].layerKNNSearch(permu_key, cfg_.max_candi_per_layer_, cfg_.max_dist_sq_, tmp_res);
-          res_container.insert(res_container.end(), tmp_res.begin(),
-                               tmp_res.end());  // Q:different thres for different levels?
-        }
-      }
-      // limit number of returned values in layer
-      std::sort(res_container.begin() + size_beg, res_container.end(),
-                [&](const std::pair<IndexOfKey, KeyFloatType> &a, const std::pair<IndexOfKey, KeyFloatType> &b) {
-                  return a.second < b.second;
-                });
-      if (res_container.size() > cfg_.max_candi_per_layer_ + size_beg)
-        res_container.resize(cfg_.max_candi_per_layer_ + size_beg, res_container[0]);
-
-    }
-
-//    // limit number of returned values as whole
-//    std::sort(res_container.begin(), res_container.end(),
-//              [&](const std::pair<size_t, KeyFloatType> &a, const std::pair<size_t, KeyFloatType> &b) {
-//                return a.second < b.second;
-//              });
-//    if (res_container.size() > cfg_.max_total_candi_)
-//      res_container.resize(cfg_.max_total_candi_);
-
-    std::set<size_t> used_gidx;
-    printf("Query dists_sq: ");
-    for (const auto &res: res_container) {
-      if (used_gidx.find(res.first.gidx) == used_gidx.end()) {
-        used_gidx.insert(res.first.gidx);
-        cand_ptrs.emplace_back(all_bevs_[res.first.gidx]);
-        dist_sq.emplace_back(res.second);
-        printf("%7.4f", res.second);
-      }
-    }
-    printf("\n");
-
-
-    // find which bucket ranges does the query fall in
-
-    // query and accumulate results
-
-  }
+                std::vector<std::shared_ptr<const ContourManager>> &cand_ptrs,
+                std::vector<KeyFloatType> &dist_sq) const;
 
   // TODO: unlike queryKNN, this one directly calculates relative transform and requires no post processing
   //  outside the function. The returned cmng are the matched ones.
-  void queryRangedKNN(const ContourManager &q_cont,
-                      std::vector<std::shared_ptr<ContourManager>> &cand_ptrs,
-                      std::vector<KeyFloatType> &dist_sq) const {
+  ///
+  /// \param q_cont
+  /// \param cand_ptrs
+  /// \param cand_corr
+  /// \param cand_tf candidates are src/old, T_tgt = T_delta * T_src
+  void queryRangedKNN(const std::shared_ptr<const ContourManager> &q_ptr,
+                      std::vector<std::shared_ptr<const ContourManager>> &cand_ptrs,
+                      std::vector<double> &cand_corr,
+                      std::vector<Eigen::Isometry2d> &cand_tf) const {
     cand_ptrs.clear();
-    dist_sq.clear();
+    cand_corr.clear();
 
-    double t1 = 0, t2 = 0, t3 = 0, t4 = 0;
+    double t1 = 0, t2 = 0, t3 = 0, t4 = 0, t5 = 0;
     TicToc clk;
 
+    CandSimScore score_lb(10, 5, 0.65);
+    CandidateManager cand_mng(q_ptr, score_lb);
+
     // for each layer
-    std::set<size_t> matched_gidx;
+//    std::set<size_t> matched_gidx;
     for (int ll = 0; ll < q_levels_.size(); ll++) {
-      std::vector<BCI> q_bcis = q_cont.getLevBCI(q_levels_[ll]);
-      std::vector<RetrievalKey> q_keys = q_cont.getRetrievalKey(q_levels_[ll]);
+      std::vector<BCI> q_bcis = q_ptr->getLevBCI(q_levels_[ll]);
+      std::vector<RetrievalKey> q_keys = q_ptr->getLevRetrievalKey(q_levels_[ll]);
       DCHECK_EQ(q_bcis.size(), q_keys.size());
       for (int seq = 0; seq < q_bcis.size(); seq++) {
         if (q_keys[seq].sum() != 0) {
@@ -687,78 +828,58 @@ public:
           t1 += clk.toc();
 
           printf("L:%d S:%d. Found in range: %lu\n", q_levels_[ll], seq, tmp_res.size());
-          int num_aft_check1 = 0;
-          int num_aft_check2 = 0;
-          int num_aft_check3 = 0;
 
           // 2. check
           for (const auto &sear_res: tmp_res) {
-            if (matched_gidx.find(sear_res.first.gidx) != matched_gidx.end())
-              continue;
-            // source: old in the db. target: query point.
-            // check: (1/3) anchor similarity
             clk.tic();
-            bool anchor_sim = ContourManager::checkContPairSim(*all_bevs_[sear_res.first.gidx], q_cont,
-                                                               ConstellationPair(q_levels_[ll], sear_res.first.seq,
-                                                                                 seq));
-            t2 += clk.toctic();
-
-            if (!anchor_sim)
-              continue;
-            num_aft_check1++;
-
-            std::vector<ConstellationPair> tmp_pairs;
-            int status_code = BCI::checkConstellSim(
-                all_bevs_[sear_res.first.gidx]->getBCI(sear_res.first.level, sear_res.first.seq),
-                q_bcis[seq], tmp_pairs);  // check (2/3): pure constellation check
-            t3 += clk.toctic();
-
-            if (status_code > 10) {
-              num_aft_check2++;
-              std::vector<int> tmp_sim_idx;  // the index of contours in tmp_pairs after individual check
-              std::pair<Eigen::Isometry2d, int> mat_res;
-              // check (3/3): individual similarity check
-
-              mat_res = ContourManager::calcScanCorresp(*all_bevs_[sear_res.first.gidx], q_cont, tmp_pairs, tmp_sim_idx,
-                                                        5);  // 5: minimal remaining pairs required
-              t4 += clk.toctic();
-
-              if (mat_res.second >= 5) {
-                // TODO: more checks
-                num_aft_check3++;
-                matched_gidx.insert(sear_res.first.gidx);
-                cand_ptrs.emplace_back(all_bevs_[sear_res.first.gidx]);
-                dist_sq.emplace_back(sear_res.second);
-              }
-            }
+            bool add_one = cand_mng.checkCandWithHint(all_bevs_[sear_res.first.gidx],
+                                                      ConstellationPair(q_levels_[ll], sear_res.first.seq, seq));
+            t2 += clk.toc();
           }
-          if (num_aft_check1) {
-            printf("L:%d S:%d. After check 1: %d\n", q_levels_[ll], seq, num_aft_check1);
-            printf("L:%d S:%d. After check 2: %d\n", q_levels_[ll], seq, num_aft_check2);
-            printf("L:%d S:%d. After check 3: %d\n", q_levels_[ll], seq, num_aft_check3);
-          }
-          // 3.
+
         }
       }
     }
 
-    printf("T range search: %7.5f\n", t1);
-    printf("T anchor check: %7.5f\n", t2);
-    printf("T conste check: %7.5f\n", t3);
-    printf("T calc corresp: %7.5f\n", t4);
-    // TODO: more checks after collecting the results.
-//    for(auto it=matched_gidx.begin();it!=matched_gidx.end();it++){
-//
-//    }
+    // find the best ones with fine tuning:
+    const int top_n = 1;
+    std::vector<std::shared_ptr<const ContourManager>> res_cand_ptr;
+    std::vector<double> res_corr;
+    std::vector<Eigen::Isometry2d> res_T;
 
-    // TODO: separate pose refinement into another function
+    clk.tic();
+    int num_best_cands = cand_mng.fineOptimize(top_n, res_cand_ptr, res_corr, res_T);
+    t5 += clk.toc();
+
+    if (num_best_cands) {
+      printf("After check 1: %d\n", cand_mng.num_aft_check1);
+      printf("After check 2: %d\n", cand_mng.num_aft_check2);
+      printf("After check 3: %d\n", cand_mng.num_aft_check3);
+      printf("After check 4: %d\n", cand_mng.num_aft_check4);
+    } else {
+      printf("No candidates are valid after checks.\n");
+    }
+
+    for (int i = 0; i < num_best_cands; i++) {
+      cand_ptrs.emplace_back(res_cand_ptr[i]);
+      cand_corr.emplace_back(res_corr[i]);
+      cand_tf.emplace_back(res_T[i]);
+    }
+
+    printf("T knn search : %7.5f\n", t1);
+    printf("T running chk: %7.5f\n", t2);
+//    printf("T conste check: %7.5f\n", t3);
+//    printf("T calc corresp: %7.5f\n", t4);
+    printf("T fine optim : %7.5f\n", t5);
+
+    // TODO: separate pose refinement into another protected function
   }
 
   // TO-DO: 2. add a scan, and retrieval data to buffer
   void addScan(const std::shared_ptr<ContourManager> &added, double curr_timestamp) {
     for (int ll = 0; ll < q_levels_.size(); ll++) {
       int seq = 0; // key seq in a layer for a given scan.
-      for (const auto &permu_key: added->getRetrievalKey(q_levels_[ll])) {
+      for (const auto &permu_key: added->getLevRetrievalKey(q_levels_[ll])) {
         if (permu_key.sum() != 0)
           layer_db_[ll].pushBuffer(permu_key, curr_timestamp, IndexOfKey(all_bevs_.size(), q_levels_[ll], seq));
         seq++;

@@ -17,6 +17,33 @@
 
 const std::string PROJ_DIR = std::string(PJSRCDIR);
 
+template<int dim>
+struct SimpleRMSE {
+  double sum_sqs = 0;
+  double sum_abs = 0;
+  int cnt_sqs = 0;
+
+  SimpleRMSE() = default;
+
+  void addOneErr(const double *d) {
+    cnt_sqs++;
+    double tmp = 0;
+    for (int i = 0; i < dim; i++) {
+      tmp += d[i] * d[i];
+    }
+    sum_sqs += tmp;
+    sum_abs += std::sqrt(tmp);
+  }
+
+  double getRMSE() const {
+    return std::sqrt(sum_sqs / cnt_sqs);
+  }
+
+  double getMean() const {
+    return sum_abs / cnt_sqs;
+  }
+};
+
 class RosBagPlayLoopTest {
   // ros stuff
   ros::NodeHandle nh;
@@ -36,13 +63,16 @@ class RosBagPlayLoopTest {
   tf2_ros::TransformListener tfListener;
   int lc_cnt{}, seq_cnt{}, valid_lc_cnt{};
   int lc_pose_cnt{}, lc_fn_pose_cnt{};
+  SimpleRMSE<2> trans_rmse;
+  SimpleRMSE<1> rot_rmse;
+
 
   bool time_beg_set = false;
   ros::Time time_beg;
 
 
 public:
-  explicit RosBagPlayLoopTest(ros::NodeHandle &nh_) : nh(nh_), ros_io(0, "/velodyne_points", nh_),
+  explicit RosBagPlayLoopTest(ros::NodeHandle &nh_) : nh(nh_), ros_io(0, "/velodyne_points", nh_, 1234567),
                                                       tfListener(tfBuffer),
                                                       contour_db(ContourDBConfig(), std::vector<int>({1, 2, 3})) {
     path_msg.header.frame_id = "world";
@@ -128,7 +158,7 @@ public:
 //          printf("Image saved: %s-%s\n", cmng_ptr->getStrID().c_str(), scans[j]->getStrID().c_str());
 //          printf("Key squared diffs at different levels: ");
 //          for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
-//            RetrievalKey diff = scans[i]->getRetrievalKey(ll) - scans[j]->getRetrievalKey(ll);
+//            RetrievalKey diff = scans[i]->getRetrievalKey(ll) - scans[j]->getLevRetrievalKey(ll);
 //            printf("%7.2f ", diff.squaredNorm());
 //          }
 //          printf("\n");
@@ -139,12 +169,12 @@ public:
     // case 2: use tree
 //    // 2.1.1 query case 1:
 //    std::vector<std::shared_ptr<ContourManager>> candidate_loop;
-//    std::vector<KeyFloatType> dists_sq;
+//    std::vector<KeyFloatType> cand_corr;
 //    TicToc clk_kdsear;
-//    contour_db.queryKNN(*cmng_ptr, candidate_loop, dists_sq);
+//    contour_db.queryKNN(*cmng_ptr, candidate_loop, cand_corr);
 //    printf("%lu Candidates in %7.5fs: ", candidate_loop.size(), clk_kdsear.toc());
 //    if (!candidate_loop.empty())
-//      printf(" dist sq from %7.4f to %7.4f\n", dists_sq.front(), dists_sq.back());
+//      printf(" dist sq from %7.4f to %7.4f\n", cand_corr.front(), cand_corr.back());
 //    else
 //      printf("\n");
 //
@@ -163,17 +193,18 @@ public:
 //        printf("Image saved: %s-%s\n", cmng_ptr->getStrID().c_str(), candidate_loop[j]->getStrID().c_str());
 ////        printf("Key squared diffs at different levels: ");
 ////        for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
-////          RetrievalKey diff = cmng_ptr->getRetrievalKey(ll) - candidate_loop[j]->getRetrievalKey(ll);
+////          RetrievalKey diff = cmng_ptr->getRetrievalKey(ll) - candidate_loop[j]->getLevRetrievalKey(ll);
 ////          printf("%7.2f ", diff.squaredNorm());
 ////        }
 //      }
 //    }
 
     // 2.1.2 query case 2:
-    std::vector<std::shared_ptr<ContourManager>> candidate_loop;
-    std::vector<KeyFloatType> dists_sq;
+    std::vector<std::shared_ptr<const ContourManager>> candidate_loop;
+    std::vector<double> cand_corr;
+    std::vector<Eigen::Isometry2d> bev_tfs;
     clk.tic();
-    contour_db.queryRangedKNN(*cmng_ptr, candidate_loop, dists_sq);
+    contour_db.queryRangedKNN(cmng_ptr, candidate_loop, cand_corr, bev_tfs);
     printf("%lu Candidates in %7.5fs: \n", candidate_loop.size(), clk.toc());
 
     bool has_valid_lc = false;
@@ -183,6 +214,17 @@ public:
       new_lc_pairs.emplace_back(cnt, candidate_loop[j]->getIntID());
 
       // record "valid" loop closure
+      auto tf_err = ConstellCorrelation::evalMetricEst(bev_tfs[j], gt_poses[new_lc_pairs.back().second],
+                                                       gt_poses[new_lc_pairs.back().first], config);
+
+      // metric error benchmark
+      double err_vec[3] = {tf_err.translation().x(), tf_err.translation().y(), std::atan2(tf_err(1, 0), tf_err(0, 0))};
+      printf(" Error: dx=%f, dy=%f, dtheta=%f\n", err_vec[0], err_vec[1], err_vec[2]);
+      trans_rmse.addOneErr(err_vec);
+      rot_rmse.addOneErr(err_vec + 2);
+      printf(" Error mean: t:%7.4f, r:%7.4f of %d lc\n", trans_rmse.getMean(), rot_rmse.getMean(), trans_rmse.cnt_sqs);
+      printf(" Error rmse: t:%7.4f, r:%7.4f\n", trans_rmse.getRMSE(), rot_rmse.getRMSE());
+
       if ((gt_poses[new_lc_pairs.back().first].translation() -
            gt_poses[new_lc_pairs.back().second].translation()).norm() < 4.0) {
         valid_lc_cnt++;

@@ -159,7 +159,7 @@ struct BCI { //binary constellation identity
   explicit BCI(int8_t seq, int8_t lev) : dist_bin_(0), piv_seq_(seq), level_(lev) {}
 
   // check the similarity of two BCI in terms of hidden constellation
-  static int checkConstellSim(const BCI &src, const BCI &tgt, std::vector<ConstellationPair> &constell) {
+  static int checkConstellSim(const BCI &src, const BCI &tgt, std::vector<ConstellationPair> &constell_res) {
     DCHECK_EQ(src.level_, tgt.level_);
     std::bitset<BITS_PER_LAYER * NUM_BIN_KEY_LAYER> res1, res2, res3;
     res1 = src.dist_bin_ & tgt.dist_bin_;
@@ -252,22 +252,22 @@ struct BCI { //binary constellation identity
       if (max_in_range < thres_in_range)
         return -2; // ret code -2: not enough pairs with matched dist pass the angular check
 
-      constell.clear();
-      constell.reserve(max_in_range + 1);
+      constell_res.clear();
+      constell_res.reserve(max_in_range + 1);
 
       // TODO: solve potential one-to-many matching ambiguity
       for (int i = max_in_range_beg; i < max_in_range + max_in_range_beg; i++) {
-        constell.emplace_back(potential_pairs[i % pot_sz].level, potential_pairs[i % pot_sz].seq_src,
-                              potential_pairs[i % pot_sz].seq_tgt);
+        constell_res.emplace_back(potential_pairs[i % pot_sz].level, potential_pairs[i % pot_sz].seq_src,
+                                  potential_pairs[i % pot_sz].seq_tgt);
       }
-      constell.emplace_back(src.level_, src.piv_seq_, tgt.piv_seq_);  // the pivots are also a pair.
+      constell_res.emplace_back(src.level_, src.piv_seq_, tgt.piv_seq_);  // the pivots are also a pair.
 
       // the sort is for human readability
-      std::sort(constell.begin(), constell.end(), [&](const ConstellationPair &a, const ConstellationPair &b) {
+      std::sort(constell_res.begin(), constell_res.end(), [&](const ConstellationPair &a, const ConstellationPair &b) {
         return a.level < b.level || (a.level == b.level) && a.seq_src < b.seq_src;
       });
 
-      return constell.size();
+      return constell_res.size();
 
 
     } else {
@@ -906,7 +906,7 @@ public:
   }
 
   // TODO: get retrieval key of a scan
-  const std::vector<RetrievalKey> &getRetrievalKey(int level) const {
+  const std::vector<RetrievalKey> &getLevRetrievalKey(int level) const {
     DCHECK_GE(level, 0);
     DCHECK_GT(cont_views_.size(), level);
     return layer_keys_[level];
@@ -986,8 +986,9 @@ public:
     int num_sim = 0;
     // 1. check individual sim
     for (int i = 0; i < cstl.size(); i++) {
-      if (ContourView::checkSim(*src.cont_views_[cstl[i].level][cstl[i].seq_src],
-                                *tgt.cont_views_[cstl[i].level][cstl[i].seq_tgt]))
+//      if (ContourView::checkSim(*src.cont_views_[cstl[i].level][cstl[i].seq_src],
+//                                *tgt.cont_views_[cstl[i].level][cstl[i].seq_tgt]))
+      if (checkContPairSim(src, tgt, cstl[i]))
         sim_idx.push_back(i);
     }
 

@@ -44,9 +44,16 @@ class Cont2_ROS_IO {
   tf2_ros::Buffer tfBuffer;
   tf2_ros::TransformListener tfListener;
 
+  uint16_t start_ns;  // ignore timestamps smaller than this one. Useful to precisely control the messages we want.
+
 
 protected:
   void commonLidarMsgCallback(const sensor_msgs::PointCloud2::ConstPtr &msg) {
+    if (msg->header.stamp.toNSec() < start_ns) {
+      ROS_INFO("Waiting the message to reach start time, %7.2f secs left...",
+               1e-9 * (start_ns - msg->header.stamp.toNSec()));
+      return;
+    }
     typename pcl::PointCloud<PointType>::Ptr ptr(new pcl::PointCloud<PointType>());
     pcl::fromROSMsg(*msg, *ptr);
     ptr->header.stamp = msg->header.stamp.toNSec(); // pcl conversion uses us, here we overwrite it with ns
@@ -71,7 +78,9 @@ protected:
   }
 
 public:
-  Cont2_ROS_IO(int mode, const std::string &sparam, ros::NodeHandle &nh) : mode_(mode), tfListener(tfBuffer) {
+  Cont2_ROS_IO(int mode, const std::string &sparam, ros::NodeHandle &nh, const uint64_t &ns_beg) : mode_(mode),
+                                                                                                   tfListener(tfBuffer),
+                                                                                                   start_ns(ns_beg) {
     if (mode == 0) {
       lidar_topic_ = sparam;
       sub_lidar_common_ = nh.subscribe(lidar_topic_, 2000, &Cont2_ROS_IO::commonLidarMsgCallback, this);

@@ -150,8 +150,8 @@ int main(int argc, char **argv) {
   printf("Keys:\n");
   for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
     printf("\nPermu Level %d\n", ll);
-    auto keys1 = cmng_ptr_old->getRetrievalKey(ll);
-    auto keys2 = cmng_ptr_new->getRetrievalKey(ll);
+    auto keys1 = cmng_ptr_old->getLevRetrievalKey(ll);
+    auto keys2 = cmng_ptr_new->getLevRetrievalKey(ll);
     auto bcis1 = cmng_ptr_old->getLevBCI(ll);
     auto bcis2 = cmng_ptr_new->getLevBCI(ll);
 
@@ -255,11 +255,11 @@ int main(int argc, char **argv) {
 //  0.997106 0.0760232  -4.46818
 //  0         0         1
 
-  GMMOptConfig corr_cfg;
-  ConstellCorrelation corr_est(corr_cfg);
+  ConstellCorrelation corr_est(gmm_config);
 
   // optimize
-  corr_est.calcCorrelation(*cmng_ptr_old, *cmng_ptr_new, T_init);
+  corr_est.initProblem(*cmng_ptr_old, *cmng_ptr_new, T_init);
+  const auto corr_final = corr_est.calcCorrelation();
 
   // eval with gt:
   const auto gt_poses = reader.getGtImuPoses();
@@ -272,10 +272,10 @@ int main(int argc, char **argv) {
       gt_pose_new = itm.second * T_imu_lidar;
   }
 
-  std::cout << gt_pose_old.matrix() << std::endl;
-  std::cout << gt_pose_new.matrix() << std::endl;
+//  std::cout << gt_pose_old.matrix() << std::endl;
+//  std::cout << gt_pose_new.matrix() << std::endl;
 
-  Eigen::Isometry2d T_err_2d = ConstellCorrelation::evalMetricEst(T_init, gt_pose_old, gt_pose_new, config);
+  Eigen::Isometry2d T_err_2d = ConstellCorrelation::evalMetricEst(corr_final.second, gt_pose_old, gt_pose_new, config);
   std::cout << "Error 2d:\n" << T_err_2d.matrix() << std::endl;
 
   return 0;
