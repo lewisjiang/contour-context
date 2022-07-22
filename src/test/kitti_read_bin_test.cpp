@@ -119,9 +119,13 @@ int main(int argc, char **argv) {
   // analysis data
 //  int idx_old = 34, idx_new = 2437;
 //  int idx_old = 119, idx_new = 2511;
-  int idx_old = 1561, idx_new = 2576;
+//  int idx_old = 1561, idx_new = 2576;
 //  int idx_old = 805, idx_new = 2576;
 //  int idx_old = 80, idx_new = 2481; // the return to the first turning
+
+  int idx_old = 558, idx_new = 1316;
+
+
   std::string s_old, s_new;
 
   pcl::PointCloud<pcl::PointXYZ>::ConstPtr out_ptr_old = reader.getLidarPointCloud<pcl::PointXYZ>(idx_old, s_old);
@@ -144,83 +148,63 @@ int main(int argc, char **argv) {
   printf("Analysing %s-%s\n", cmng_ptr_old->getStrID().c_str(), cmng_ptr_new->getStrID().c_str());
 
   // test 1. manual compare
-  // find the nearest keys in each level:
+  // find the nearest keys in each level: and calculate similarity
   Eigen::Isometry2d T_init;
   T_init.setIdentity();
+  std::vector<ConstellationPair> best_level_match;
   printf("Keys:\n");
   for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
-    printf("\nPermu Level %d\n", ll);
+    printf("\n---\nPermu Level %d\n", ll);
     auto keys1 = cmng_ptr_old->getLevRetrievalKey(ll);
     auto keys2 = cmng_ptr_new->getLevRetrievalKey(ll);
     auto bcis1 = cmng_ptr_old->getLevBCI(ll);
     auto bcis2 = cmng_ptr_new->getLevBCI(ll);
 
-    RetrievalKey final_k1, final_k2;
-    int f1 = 0, f2 = 0;
-    KeyFloatType min_diff = 1e6;
+    KeyFloatType best_key_diff = 1e9;
+    int seq1 = -1, seq2 = -1;
+
+    // find the best key match in each level
     for (int i1 = 0; i1 < keys1.size(); i1++) {
       for (int i2 = 0; i2 < keys2.size(); i2++) {
         const auto &k1 = keys1[i1];
         const auto &k2 = keys2[i2];
+        if (k1.sum() == 0 || k2.sum() == 0)
+          continue;
+
         KeyFloatType tmp_dist = (k1 - k2).squaredNorm();
 
-        std::vector<ConstellationPair> tmp_pairs;
-        int status_code = BCI::checkConstellSim(bcis1[i1], bcis2[i2], tmp_pairs);
-
-        std::vector<int> tmp_sim_idx;
-        std::pair<Eigen::Isometry2d, int> mat_res;
-
-        if (status_code > 10) {
-          printf("---\n");
-          mat_res = ContourManager::calcScanCorresp(*cmng_ptr_old, *cmng_ptr_new, tmp_pairs, tmp_sim_idx, 5);
-          if (mat_res.second >= 5)
-            T_init = mat_res.first;
-          printf("Level %d, key diff sq = %f\nkey1: %2dth: ", ll, tmp_dist, i1);
-          for (int key_bit = 0; key_bit < RetrievalKey::SizeAtCompileTime; key_bit++)
-            printf("%8.4f\t", k1[key_bit]);
-          printf("\nkey2: %2dth: ", i2);
-          for (int key_bit = 0; key_bit < RetrievalKey::SizeAtCompileTime; key_bit++)
-            printf("%8.4f\t", k2[key_bit]);
-          printf("\n");
-          printf("---\n");
+        if (tmp_dist < best_key_diff) {  // find best anchor pair
+          seq1 = i1;
+          seq2 = i2;
+          best_key_diff = tmp_dist;
         }
+        if (tmp_dist > 1000.0f)
+          continue;
 
-        printf("BF key diff: %d %d %7.4f, status: %2d, %d\n", i1, i2, tmp_dist, status_code, int(mat_res.second));
-        if (tmp_dist < min_diff) {
-          min_diff = tmp_dist;
-          final_k1 = k1;
-          final_k2 = k2;
-          f1 = i1;
-          f2 = i2;
-        }
+        printf("BF key diff: %d %d %10.4f, ", i1, i2, tmp_dist);
+
+        // check sim step by step:
+        CandSimScore score_lb(10, 5, 0.65);
+        CandidateManager cand_mng(cmng_ptr_new, score_lb);
+
+        ConstellationPair tmp_pair(ll, i1, i2);
+        cand_mng.checkCandWithHint(cmng_ptr_old, tmp_pair);
+
+        printf("After checks: %d, %d, %d, %d\n", cand_mng.num_aft_check1, cand_mng.num_aft_check2,
+               cand_mng.num_aft_check3, cand_mng.num_aft_check4);
+
       }
     }
-    printf("BF compare key finished\n");
+    printf("BF level compare key finished.\n");
+    if (seq1 < 0 || seq2 < 0) {
+      printf("No valid key pairs.\n");
+      continue;
+    }
 
-//    std::vector<ConstellationPair> constell_pairs;
-//    bool is_constell_sim = BCI::checkConstellSim(bcis1[f1], bcis2[f2], constell_pairs) > 0;
-//
-//    if (is_constell_sim) {
-//      printf("Found constell\n");
-//
-//      std::vector<int> sim_idx;
-//      std::pair<Eigen::Isometry2d, int> mat_res = ContourManager::calcScanCorresp(*cmng_ptr_old, *cmng_ptr_new,
-//                                                                                  constell_pairs, sim_idx, 5);
-////      std::cout << mat_res.second << std::endl;
-////      std::cout << mat_res.first.matrix() << std::endl;
-//    } else {
-//      printf("No constellation found\n");
-//    }
-
-//    printf("Level %d, minimal key diff sq = %f\nkey1: %2dth: ", ll, min_diff, f1);
-//    for (int key_bit = 0; key_bit < RetrievalKey::SizeAtCompileTime; key_bit++)
-//      printf("%8.4f\t", final_k1[key_bit]);
-//    printf("\nkey2: %2dth: ", f2);
-//    for (int key_bit = 0; key_bit < RetrievalKey::SizeAtCompileTime; key_bit++)
-//      printf("%8.4f\t", final_k2[key_bit]);
-//    printf("\n");
 
   }
+
+
   std::string f_name =
       PROJ_DIR + "/results/pair_comp_img/pair_" + cmng_ptr_old->getStrID() + "-" + cmng_ptr_new->getStrID() +
       ".png";
@@ -260,6 +244,7 @@ int main(int argc, char **argv) {
   // optimize
   corr_est.initProblem(*cmng_ptr_old, *cmng_ptr_new, T_init);
   const auto corr_final = corr_est.calcCorrelation();
+  std::cout << "T init 2d: \n" << corr_final.second.matrix() << std::endl;
 
   // eval with gt:
   const auto gt_poses = reader.getGtImuPoses();

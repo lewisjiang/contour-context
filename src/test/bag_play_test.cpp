@@ -49,13 +49,16 @@ class RosBagPlayLoopTest {
   ros::NodeHandle nh;
   ros::Publisher pub_path;
   ros::Publisher pub_lc_connections;
+  ros::Publisher pub_pose_idx;
   nav_msgs::Path path_msg;
   visualization_msgs::MarkerArray line_array;
+  visualization_msgs::MarkerArray idx_text_array;
 
   std::vector<std::shared_ptr<ContourManager>> scans;
   ContourDB contour_db;
   std::vector<Eigen::Isometry3d> gt_poses;
   std::vector<double> poses_time_z_shift;
+  std::vector<double> all_raw_time_stamps;
 
   Cont2_ROS_IO<pcl::PointXYZ> ros_io;
 
@@ -77,8 +80,109 @@ public:
                                                       contour_db(ContourDBConfig(), std::vector<int>({1, 2, 3})) {
     path_msg.header.frame_id = "world";
     pub_path = nh_.advertise<nav_msgs::Path>("/gt_path", 10000);
+    pub_pose_idx = nh_.advertise<visualization_msgs::MarkerArray>("/pose_index", 10000);
     pub_lc_connections = nh_.advertise<visualization_msgs::MarkerArray>("/lc_connect", 10000);
   }
+
+  void loadRawTs(const std::string &f_raw_ts) {
+    std::fstream ts_file;
+    ts_file.open(f_raw_ts, std::ios::in);
+    if (ts_file.rdstate() != std::ifstream::goodbit) {
+      std::cout << "Cannot open ts" << f_raw_ts << ", returning..." << std::endl;
+      return;
+    }
+    std::string strbuf;
+    while (std::getline(ts_file, strbuf)) {
+      std::istringstream iss(strbuf);
+      std::string ts;
+      if (iss >> ts) {
+        all_raw_time_stamps.push_back(std::stod(ts));
+      }
+    }
+    printf("%lu timestamps loaded.\n", all_raw_time_stamps.size());
+  }
+
+  // given the ts, find the sequence id of the nearest ts
+  int lookupTs(double ts_query, double tol = 1e-3) const {
+    auto it_low = std::lower_bound(all_raw_time_stamps.begin(), all_raw_time_stamps.end(), ts_query);
+    auto it = it_low;
+    if (it_low == all_raw_time_stamps.begin()) {
+      it = it_low;
+    } else if (it_low == all_raw_time_stamps.end()) {
+      it = it_low - 1;
+    } else {
+      it = std::abs(ts_query - *it_low) < std::abs(ts_query - *(it_low - 1)) ?
+           it_low : it_low - 1;
+    }
+    CHECK(std::abs(*it - ts_query) < tol);
+    return it_low - all_raw_time_stamps.begin();
+  }
+
+  // TODO: load gt and use it in
+//  void loadSeqGT(const std::string &f_seq_calib, const std::string &f_seq_ts, const std::string &f_seq_gt_pose,
+//                 int seq_beg) {
+//    // 1. calibration
+//    std::fstream calib_file;
+//    calib_file.open(f_seq_calib, std::ios::in);
+//    if (calib_file.rdstate() != std::ifstream::goodbit) {
+//      std::cout << "Cannot open calibration" << f_seq_calib << ", returning..." << std::endl;
+//      return;
+//    }
+//    bool calib_set = false;
+//    Eigen::Isometry3d T_lc_velod_;    // points in velodyne to left camera, Tr
+//    Eigen::Quaterniond calib_rot_q;
+//    Eigen::Vector3d calib_trans;
+//    std::string strbuf;
+//    while (std::getline(calib_file, strbuf)) {
+//      std::istringstream iss(strbuf);
+//      std::string pname;
+//      if (iss >> pname) {
+//        if (pname == "Tr:") {
+//          Eigen::Matrix3d rot_mat;
+//          for (int i = 0; i < 12; i++) {
+//            if (i % 4 == 3)
+//              iss >> calib_trans(i / 4);
+//            else
+//              iss >> rot_mat(i % 4, i / 4);
+//          }
+//          calib_rot_q = Eigen::Quaterniond(rot_mat);
+//          calib_set = true;
+//          break;
+//        }
+//      }
+//    }
+//    CHECK(calib_set);
+//    T_lc_velod_.setIdentity();
+//    T_lc_velod_.rotate(calib_rot_q);
+//    T_lc_velod_.pretranslate(calib_trans);
+//
+//    // 2. ts and gt left camera pose
+//    std::fstream ts_file, gt_pose_file;
+//    ts_file.open(f_seq_ts, std::ios::in);
+//    // the ts with the raw lidar data, and we select a segment that matches the sequence
+//    gt_pose_file.open(f_seq_gt_pose, std::ios::in);
+//    if (ts_file.rdstate() != std::ifstream::goodbit) {
+//      std::cout << "Cannot open ts" << f_seq_ts << ", returning..." << std::endl;
+//      return;
+//    }
+//    if (gt_pose_file.rdstate() != std::ifstream::goodbit) {
+//      std::cout << "Cannot open gt pose" << f_seq_gt_pose << ", returning..." << std::endl;
+//      return;
+//    }
+//
+////    int ts_cnt = 0;
+////    while (std::getline(ts_file, strbuf)) {
+////      std::istringstream iss(strbuf);
+////      std::string pname;
+////      if (iss >> pname) {
+////        if (ts_cnt >= seq_beg) {
+////
+////        }
+////        ts_cnt++;
+////      }
+////    }
+//
+//  }
 
   void processOnce(int &cnt) {
 
@@ -99,7 +203,14 @@ public:
       time_beg_set = true;
     }
 
-    auto T_gt_last = tf2::transformToEigen(tf_gt_last);
+    Eigen::Isometry3d T_gt_last; // velodyne to world transform
+
+    // TODO: Where do we get the gt?
+    // case 1: use gpx
+    T_gt_last = tf2::transformToEigen(tf_gt_last); // use looked up tf
+    // case 2: use sequence gt
+
+    int scan_seq = lookupTs(time.toSec());
 
     Eigen::Vector3d time_translate(0, 0, 1);
     time_translate = time_translate * (time.toSec() - time_beg.toSec()) / 60;   // elevate 1m per minute
@@ -110,6 +221,7 @@ public:
 
     tf_gt_last.transform.translation.z += time_translate.z();// elevate 1m per minute
     publishPath(time, tf_gt_last);
+    publishScanSeqText(time, tf_gt_last, scan_seq);
 
     printf("---\nour curr seq: %d, stamp: %lu\n", cnt, time.toNSec());
 
@@ -137,67 +249,6 @@ public:
     std::cout << "Time save layers: " << clk.toctic() << std::endl;
 
     cmng_ptr->clearImage();
-//    // case 1: poll over all data
-//    scans.emplace_back(cmng_ptr);
-//    if (scans.size() > 1) {
-//      int i = cnt;
-//      for (int j = 0; j < i - 100; j += 5) { // avoid nearby loop closure
-//        printf("Matching new: %d with old: %d:", i, j);
-//        TicToc clk_match_once;
-//        auto lc_detect_res = ContourManager::calcScanCorresp(*scans[i], *scans[j]);  // (src, tgt)
-//        printf("Match once time: %f\n", clk_match_once.toc());
-//
-//        if (lc_detect_res.second) {
-//          new_lc_pairs.emplace_back(i, j);
-//
-//          // write file
-//          std::string f_name =
-//              PROJ_DIR + "/results/match_comp_img/lc_" + cmng_ptr->getStrID() + "-" + scans[j]->getStrID() + ".png";
-//          saveMatchedPairImg(config, f_name, *cmng_ptr, *scans[j]);
-//
-//          printf("Image saved: %s-%s\n", cmng_ptr->getStrID().c_str(), scans[j]->getStrID().c_str());
-//          printf("Key squared diffs at different levels: ");
-//          for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
-//            RetrievalKey diff = scans[i]->getRetrievalKey(ll) - scans[j]->getLevRetrievalKey(ll);
-//            printf("%7.2f ", diff.squaredNorm());
-//          }
-//          printf("\n");
-//        }
-//      }
-//    }
-
-    // case 2: use tree
-//    // 2.1.1 query case 1:
-//    std::vector<std::shared_ptr<ContourManager>> candidate_loop;
-//    std::vector<KeyFloatType> cand_corr;
-//    TicToc clk_kdsear;
-//    contour_db.queryKNN(*cmng_ptr, candidate_loop, cand_corr);
-//    printf("%lu Candidates in %7.5fs: ", candidate_loop.size(), clk_kdsear.toc());
-//    if (!candidate_loop.empty())
-//      printf(" dist sq from %7.4f to %7.4f\n", cand_corr.front(), cand_corr.back());
-//    else
-//      printf("\n");
-//
-//    for (int j = 0; j < candidate_loop.size(); j++) {
-//      printf("Matching new: %d with old: %d:", cnt, candidate_loop[j]->getIntID());
-//      TicToc clk_match_once;
-//      auto lc_detect_res = ContourManager::calcScanCorresp(*cmng_ptr, *candidate_loop[j]);  // (src, tgt)
-//      printf("Match once time: %f\n", clk_match_once.toc());
-//      if (lc_detect_res.second) {
-//        new_lc_pairs.emplace_back(cnt, candidate_loop[j]->getIntID());
-//        // write file
-//        std::string f_name =
-//            PROJ_DIR + "/results/match_comp_img/lc_" + cmng_ptr->getStrID() + "-" + candidate_loop[j]->getStrID() +
-//            ".png";
-//        ContourManager::saveMatchedPairImg(f_name, *cmng_ptr, *candidate_loop[j]);
-//        printf("Image saved: %s-%s\n", cmng_ptr->getStrID().c_str(), candidate_loop[j]->getStrID().c_str());
-////        printf("Key squared diffs at different levels: ");
-////        for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
-////          RetrievalKey diff = cmng_ptr->getRetrievalKey(ll) - candidate_loop[j]->getLevRetrievalKey(ll);
-////          printf("%7.2f ", diff.squaredNorm());
-////        }
-//      }
-//    }
 
     // 2.1.2 query case 2:
     std::vector<std::shared_ptr<const ContourManager>> candidate_loop;
@@ -284,6 +335,35 @@ public:
     pub_path.publish(path_msg);
   }
 
+  void publishScanSeqText(ros::Time time, const geometry_msgs::TransformStamped &tf_gt_last, int seq) {
+    // index
+    visualization_msgs::Marker marker;
+    marker.header.frame_id = "world";
+    marker.header.stamp = time;
+    marker.ns = "myns";
+    marker.id = seq;
+
+    marker.action = visualization_msgs::Marker::ADD;
+    marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+
+    marker.text = std::to_string(seq);
+    marker.scale.z = 0.25;
+    marker.lifetime = ros::Duration();
+
+    marker.pose.orientation = tf_gt_last.transform.rotation;
+    marker.pose.position.x = tf_gt_last.transform.translation.x;
+    marker.pose.position.y = tf_gt_last.transform.translation.y;
+    marker.pose.position.z = tf_gt_last.transform.translation.z;
+
+    marker.color.a = 1.0; // Don't forget to set the alpha!
+    marker.color.r = 0.0f;
+    marker.color.g = 1.0f;
+    marker.color.b = 1.0f;
+
+    idx_text_array.markers.emplace_back(marker);
+    pub_pose_idx.publish(idx_text_array);
+  }
+
   void publishLCConnections(const std::vector<std::pair<int, int>> &new_lc_pairs, ros::Time time) {
     printf("Num new pairs: %lu\n", new_lc_pairs.size());
     line_array.markers.clear();
@@ -338,6 +418,9 @@ int main(int argc, char **argv) {
 
   printf("tag 0\n");
   RosBagPlayLoopTest o(nh);
+
+  std::string ts_path = "/home/lewis/catkin_ws2/src/contour-context/results/kitti_seq05_seconds.txt";
+  o.loadRawTs(ts_path);
 
   ros::Rate rate(50);
   int cnt = 0;
