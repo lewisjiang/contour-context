@@ -125,12 +125,12 @@ def plot_contours(raw_data=None, levels=None, legends=()):
             V = raw_data[i][j, 10:14].reshape((2, 2,)).T
             cov_xy = V @ J @ V.T
 
-            if i == 0:  # manual transform
-                m_rot = np.array([[0, -1], [1, 0]])
-                m_trans = np.array([[100], [0]])
-                mean_xy = m_rot @ np.expand_dims(mean_xy, axis=1) + m_trans
-                mean_xy = np.squeeze(mean_xy)
-                cov_xy = m_rot @ cov_xy @ m_rot.T
+            # if i == 0:  # manual transform
+            #     m_rot = np.array([[0, -1], [1, 0]])
+            #     m_trans = np.array([[100], [0]])
+            #     mean_xy = m_rot @ np.expand_dims(mean_xy, axis=1) + m_trans
+            #     mean_xy = np.squeeze(mean_xy)
+            #     cov_xy = m_rot @ cov_xy @ m_rot.T
 
             selected_idx = [i for i in range(10)]
             # selected_idx = [1, 3, 5, 7]
@@ -203,13 +203,23 @@ if __name__ == "__main__":
     # f_old = "../results/contours_orig-0000002437.txt"
     # f_new = "../results/contours_orig-0000000119.txt"
     # f_old = "../results/contours_orig-0000002511.txt"
-    f_new = "../results/contours_orig-0000001561.txt"
-    f_old = "../results/contours_orig-0000002576.txt"
+
+    # f_new = "../results/contours_orig-0000001561.txt"
+    # f_old = "../results/contours_orig-0000002576.txt"
 
     # f_new = "../results/contours_accu-0000000119.txt"
     # f_old = "../results/contours_accu-0000002511.txt"
 
-    data_names = ("t=1561", "t=2576")
-    data1 = read_data_from_file(f_new)
-    data2 = read_data_from_file(f_old)
+    # f_old = "../results/contours_orig-0000000558.txt"
+    # f_new = "../results/contours_orig-0000001316.txt"
+    # data_names = ("t=1561", "t=2576")
+    # data_names = ("t=565", "t=1316")
+    # data_names = ("t=0558", "t=1316")
+
+    f_old = "../results/contours_orig-0000000769.txt"
+    f_new = "../results/contours_orig-0000001512.txt"
+    data_names = ("t=0769", "t=1512")
+
+    data1 = read_data_from_file(f_old)
+    data2 = read_data_from_file(f_new)
     plot_contours([data1, data2], [0, 1, 2, 3, 4, 5], data_names)
