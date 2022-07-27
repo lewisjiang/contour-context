@@ -172,33 +172,9 @@ struct BCI { //binary constellation identity
 //    std::cout << src.dist_bin_ << std::endl << tgt.dist_bin_ << std::endl;
 
     // the anchors are assumed to be matched
-    if (ovlp_sum >= 10 && max_ele >= 5) {  // TODO: use config instead of hardcoded
+    if (ovlp_sum >= 9 && max_ele >= 5) {  // TODO: use config instead of hardcoded
       // check the angular for constellation
       std::vector<DistSimPair> potential_pairs;
-
-//      for (u_int16_t b = 1; b < BITS_PER_LAYER * NUM_BIN_KEY_LAYER - 1; b++) {
-//        if (tgt.dist_bin_[b])
-//          for (const auto &rp2: tgt.dist_bit_neighbors_.at(b)) {
-//            if (res1[b])  // .test(pos) will throw out-of-range exception
-//              for (const auto &rp1: src.dist_bit_neighbors_.at(b)) {
-//                DCHECK_EQ(rp1.level, rp2.level);
-//                potential_pairs.emplace_back(rp1.level, rp1.seq, rp2.seq, rp2.theta - rp1.theta);
-//              }
-//
-//            if (res2[b])
-//              // align after shift left, but `bitset<> x[0]` starts from right, so = origin-1
-//              for (const auto &rp1: src.dist_bit_neighbors_.at(b - 1)) {
-//                DCHECK_EQ(rp1.level, rp2.level);
-//                potential_pairs.emplace_back(rp1.level, rp1.seq, rp2.seq, rp2.theta - rp1.theta);
-//              }
-//
-//            if (res3[b])
-//              for (const auto &rp1: src.dist_bit_neighbors_.at(b + 1)) {
-//                DCHECK_EQ(rp1.level, rp2.level);
-//                potential_pairs.emplace_back(rp1.level, rp1.seq, rp2.seq, rp2.theta - rp1.theta);
-//              }
-//          }
-//      }
 
       int16_t p11 = 0, p12;
       for (int16_t p2 = 0; p2 < tgt.nei_idx_segs_.size() - 1; p2++) {
@@ -250,7 +226,7 @@ struct BCI { //binary constellation identity
       }
 
       if (max_in_range < thres_in_range)
-        return -2; // ret code -2: not enough pairs with matched dist pass the angular check
+        return -10 * max_in_range; // ret code -2: not enough pairs with matched dist pass the angular check
 
       constell_res.clear();
       constell_res.reserve(max_in_range + 1);
@@ -271,7 +247,7 @@ struct BCI { //binary constellation identity
 
 
     } else {
-      return -1; // ret code -1: not passing dist binary check
+      return -(100 * ovlp_sum + max_ele); // ret code -1: not passing dist binary check
     }
   }
 };
@@ -707,7 +683,7 @@ public:
           for (int bl = 0; bl < NUM_BIN_KEY_LAYER; bl++) {
             int bit_offset = bl * BITS_PER_LAYER;
             for (int j = 0; j < std::min(dist_firsts, (int) cont_views_[DIST_BIN_LAYERS[bl]].size()); j++) {
-              if (j != seq) {
+              if (ll != DIST_BIN_LAYERS[bl] || j != seq) {
                 V2F vec_cc =
                     cont_views_[DIST_BIN_LAYERS[bl]][j]->pos_mean_ - cont_views_[ll][seq]->pos_mean_;
                 float tmp_dist = vec_cc.norm();
@@ -981,15 +957,29 @@ public:
     DCHECK_EQ(src.cont_views_.size(), tgt.cont_views_.size());
 
     std::pair<Eigen::Isometry2d, int> ret{};
+    std::map<int, std::pair<float, float>> lev_frac;  // {lev:[src, tgt], }
 
     sim_idx.clear();
     int num_sim = 0;
     // 1. check individual sim
+    printf("check individual sim of the constellation:\n");
     for (int i = 0; i < cstl.size(); i++) {
 //      if (ContourView::checkSim(*src.cont_views_[cstl[i].level][cstl[i].seq_src],
 //                                *tgt.cont_views_[cstl[i].level][cstl[i].seq_tgt]))
-      if (checkContPairSim(src, tgt, cstl[i]))
+      bool curr_success = false;
+      if (checkContPairSim(src, tgt, cstl[i])) {
         sim_idx.push_back(i);
+        auto &it = lev_frac[cstl[i].level];
+        it.first += src.cont_perc_[cstl[i].level][cstl[i].seq_src];
+        it.second += tgt.cont_perc_[cstl[i].level][cstl[i].seq_tgt];
+        curr_success = true;
+      }
+
+      printf("%d@lev %d, %d-%d\n", int(curr_success), cstl[i].level, cstl[i].seq_src, cstl[i].seq_tgt);
+    }
+
+    for (const auto &rec: lev_frac) {
+      printf("matched percent lev: %d, %.3f/%.3f\n", rec.first, rec.second.first, rec.second.second);
     }
 
     ret.second = sim_idx.size();

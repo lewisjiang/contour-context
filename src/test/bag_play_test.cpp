@@ -64,8 +64,8 @@ class RosBagPlayLoopTest {
 
   tf2_ros::Buffer tfBuffer;
   tf2_ros::TransformListener tfListener;
-  int lc_cnt{}, seq_cnt{}, valid_lc_cnt{};
-  int lc_pose_cnt{}, lc_fn_pose_cnt{};
+  int lc_cnt{}, seq_cnt{};
+  int lc_tp_pose_cnt{}, lc_fn_pose_cnt{}, lc_fp_pose_cnt{};
   SimpleRMSE<2> trans_rmse;
   SimpleRMSE<1> rot_rmse;
 
@@ -258,8 +258,10 @@ public:
     contour_db.queryRangedKNN(cmng_ptr, candidate_loop, cand_corr, bev_tfs);
     printf("%lu Candidates in %7.5fs: \n", candidate_loop.size(), clk.toc());
 
-    bool has_valid_lc = false;
+    bool has_tp_lc = false;
+    bool has_fp_lc = false;
 
+    CHECK(candidate_loop.size() < 2); // TODO: at most one candidate
     for (int j = 0; j < candidate_loop.size(); j++) {
       printf("Matching new: %d with old: %d:", cnt, candidate_loop[j]->getIntID());
       new_lc_pairs.emplace_back(cnt, candidate_loop[j]->getIntID());
@@ -277,9 +279,11 @@ public:
       printf(" Error rmse: t:%7.4f, r:%7.4f\n", trans_rmse.getRMSE(), rot_rmse.getRMSE());
 
       if ((gt_poses[new_lc_pairs.back().first].translation() -
-           gt_poses[new_lc_pairs.back().second].translation()).norm() < 4.0) {
-        valid_lc_cnt++;
-        has_valid_lc = true;
+           gt_poses[new_lc_pairs.back().second].translation()).norm() < 4.0 || tf_err.translation().norm() < 2.0) {
+        // TODO: this judgement is based on the assumption that only one candidate is returned.
+        has_tp_lc = true;
+      } else {
+        has_fp_lc = true;
       }
 
       // write file
@@ -290,8 +294,10 @@ public:
       printf("Image saved: %s-%s\n", cmng_ptr->getStrID().c_str(), candidate_loop[j]->getStrID().c_str());
     }
 
-    if (has_valid_lc)
-      lc_pose_cnt++;
+    if (has_tp_lc)
+      lc_tp_pose_cnt++;
+    else if (has_fp_lc)
+      lc_fp_pose_cnt++;
     else {
       bool has_fn = false;
       for (int i = 0; i < cnt - 150; i++) {
@@ -316,9 +322,9 @@ public:
     publishLCConnections(new_lc_pairs, time);
     cnt++;
 
-    printf("Accumulated valid lc: %d\n", valid_lc_cnt);
-    printf("Accumulated lc poses: %d\n", lc_pose_cnt);
+    printf("Accumulated tp poses: %d\n", lc_tp_pose_cnt);
     printf("Accumulated fn poses: %d\n", lc_fn_pose_cnt);
+    printf("Accumulated fp poses: %d\n", lc_fp_pose_cnt);
 
   }
 

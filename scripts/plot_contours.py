@@ -105,6 +105,15 @@ def plot_contours(raw_data=None, levels=None, legends=()):
     used_colors = []
 
     max_xy = [0, 0]
+    tf_ed = True  # if we use a transform T_delta (T_tgt = T_delta * T_src) to have a clearer view
+    T_delta_str = """
+ 0.945709  0.325015  -22.2714
+-0.325015  0.945709   27.9173
+        0         0         1
+    """
+    T_delta_elem = [eval(i) for i in T_delta_str.split()]
+    assert not tf_ed or len(T_delta_elem) == 9
+    T_delta = np.array(T_delta_elem).reshape([3, 3])
 
     for i in range(len(raw_data)):
         data_color = cmap((i + 0.5) / len(raw_data))
@@ -125,12 +134,12 @@ def plot_contours(raw_data=None, levels=None, legends=()):
             V = raw_data[i][j, 10:14].reshape((2, 2,)).T
             cov_xy = V @ J @ V.T
 
-            # if i == 0:  # manual transform
-            #     m_rot = np.array([[0, -1], [1, 0]])
-            #     m_trans = np.array([[100], [0]])
-            #     mean_xy = m_rot @ np.expand_dims(mean_xy, axis=1) + m_trans
-            #     mean_xy = np.squeeze(mean_xy)
-            #     cov_xy = m_rot @ cov_xy @ m_rot.T
+            if i == 0 and tf_ed:  # manual transform, T_tgt = T_delta * T_src and the first one is src
+                m_rot = T_delta[0:2, 0:2]
+                m_trans = T_delta[0:2, 2:3]  # T_delta[0:2, 2] has shape (2,)
+                mean_xy = m_rot @ np.expand_dims(mean_xy, axis=1) + m_trans
+                mean_xy = np.squeeze(mean_xy)
+                cov_xy = m_rot @ cov_xy @ m_rot.T
 
             selected_idx = [i for i in range(10)]
             # selected_idx = [1, 3, 5, 7]
@@ -162,15 +171,17 @@ def plot_contours(raw_data=None, levels=None, legends=()):
         axs[i].set_aspect(aspect=1)
         axs[i].axis(border)
 
-    lines = [Ellipse((0, 0),
+    l_clr = [Ellipse((0, 0),
                      width=2,
                      height=2,
                      facecolor='none',
                      edgecolor=c, linestyle='--') for c in used_colors]
-    axs[-1].legend(lines, legends)
+    axs[-1].legend(l_clr, legends)
     # axs[-1].legend()
 
     img_name = "".join([i for i in "-".join(data_names) if i.isalnum() or i in "-_."])
+    if tf_ed:
+        img_name += "-tf_ed"
 
     plt.savefig('../results/ellipse_img/ellipse_%s.svg' % img_name, format='svg', dpi=600, bbox_inches='tight',
                 pad_inches=0)
@@ -216,9 +227,23 @@ if __name__ == "__main__":
     # data_names = ("t=565", "t=1316")
     # data_names = ("t=0558", "t=1316")
 
-    f_old = "../results/contours_orig-0000000769.txt"
-    f_new = "../results/contours_orig-0000001512.txt"
-    data_names = ("t=0769", "t=1512")
+    # f_old = "../results/contours_orig-0000000769.txt"
+    # f_new = "../results/contours_orig-0000001512.txt"
+    # data_names = ("t=0769", "t=1512")
+
+    # #########################################################
+    # Case 3: Two-scan comparison:
+    # seq_old = 895
+    # seq_new = 2632
+    # seq_old = 905
+    # seq_new = 2636
+
+    seq_old = 890
+    seq_new = 2632
+
+    f_old = "../results/contours_orig-000000%04d.txt" % seq_old
+    f_new = "../results/contours_orig-000000%04d.txt" % seq_new
+    data_names = ("t=%04d" % seq_old, "t=%04d" % seq_new)
 
     data1 = read_data_from_file(f_old)
     data2 = read_data_from_file(f_new)

@@ -51,8 +51,9 @@ def compare_contours(posid_src, posid_tgt, lev, seq_src, seq_tgt):
     str_struct = {0: "level", 1: "cell_cnt", 2: "pos_mean", 4: "pos_cov", 8: "eig_vals",
                   10: "eig_vecs", 14: "eccen", 15: "vol3_mean", 16: "com", 18: "ecc_feat", 19: "com_feat"}
     pos_struct = list(str_struct)
+    int_idx_set = {0, 1, 14, 18, 19}
 
-    fmt = "%10s | %30s | %30s |"
+    fmt = "%10s | %24s | %24s |"
     print(fmt % ("property", str(posid_src), str(posid_tgt)))
     for i in range(len(pos_struct)):
         idx_beg = pos_struct[i]
@@ -65,14 +66,25 @@ def compare_contours(posid_src, posid_tgt, lev, seq_src, seq_tgt):
         data_str2 = ""
 
         for j in range(idx_beg, idx_end):
-            data_str1 += "%.2f " % line_src[j]
-            data_str2 += "%.2f " % line_tgt[j]
+            if idx_beg in int_idx_set:
+                data_str1 += "%d " % int(line_src[j])
+                data_str2 += "%d " % int(line_tgt[j])
+            else:
+                data_str1 += "%.2f " % line_src[j]
+                data_str2 += "%.2f " % line_tgt[j]
 
-        print(fmt % (str_struct[idx_beg],
-                     data_str1,
-                     data_str2))
+        data_str1 = data_str1.strip()
+        data_str2 = data_str2.strip()
+
+        print(fmt % (str_struct[idx_beg], data_str1, data_str2))
 
 
 if __name__ == "__main__":
     print(sys.argv)
-    compare_contours(769, 1512, 2, 3, 1)
+    if len(sys.argv) == 6:
+        print("Comparing %d(%d, %d) with %d(%d, %d)" % (int(sys.argv[1]), int(sys.argv[3]), int(sys.argv[4]),
+                                                        int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[5])))
+        compare_contours(int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5]))
+    else:
+        print("Dummy example")
+        compare_contours(769, 1512, 2, 3, 1)
