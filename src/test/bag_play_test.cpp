@@ -59,6 +59,10 @@ class RosBagPlayLoopTest {
   std::vector<Eigen::Isometry3d> gt_poses;
   std::vector<double> poses_time_z_shift;
   std::vector<double> all_raw_time_stamps;
+  std::vector<Eigen::Isometry3d> all_raw_gt_l_poses;
+  int seq_beg;
+  int seq_end;
+  Eigen::Isometry3d T_lc_velod_;    // points in velodyne to left camera, Tr
 
   Cont2_ROS_IO<pcl::PointXYZ> ros_io;
 
@@ -75,13 +79,18 @@ class RosBagPlayLoopTest {
 
 
 public:
-  explicit RosBagPlayLoopTest(ros::NodeHandle &nh_) : nh(nh_), ros_io(0, "/velodyne_points", nh_, 1234567),
-                                                      tfListener(tfBuffer),
-                                                      contour_db(ContourDBConfig(), std::vector<int>({1, 2, 3})) {
+  explicit RosBagPlayLoopTest(ros::NodeHandle &nh_, int idx_beg, int idx_end,
+                              uint64_t t_seq_beg_ns = 12345) : nh(nh_), seq_beg(idx_beg), seq_end(idx_end),
+                                                               ros_io(0, "/velodyne_points", nh_, t_seq_beg_ns),
+                                                               tfListener(tfBuffer), contour_db(ContourDBConfig(),
+                                                                                                std::vector<int>(
+                                                                                                    {1, 2, 3})) {
     path_msg.header.frame_id = "world";
     pub_path = nh_.advertise<nav_msgs::Path>("/gt_path", 10000);
     pub_pose_idx = nh_.advertise<visualization_msgs::MarkerArray>("/pose_index", 10000);
     pub_lc_connections = nh_.advertise<visualization_msgs::MarkerArray>("/lc_connect", 10000);
+
+    T_lc_velod_.setIdentity();
   }
 
   void loadRawTs(const std::string &f_raw_ts) {
@@ -119,70 +128,81 @@ public:
   }
 
   // TODO: load gt and use it in
-//  void loadSeqGT(const std::string &f_seq_calib, const std::string &f_seq_ts, const std::string &f_seq_gt_pose,
-//                 int seq_beg) {
-//    // 1. calibration
-//    std::fstream calib_file;
-//    calib_file.open(f_seq_calib, std::ios::in);
-//    if (calib_file.rdstate() != std::ifstream::goodbit) {
-//      std::cout << "Cannot open calibration" << f_seq_calib << ", returning..." << std::endl;
-//      return;
-//    }
-//    bool calib_set = false;
-//    Eigen::Isometry3d T_lc_velod_;    // points in velodyne to left camera, Tr
-//    Eigen::Quaterniond calib_rot_q;
-//    Eigen::Vector3d calib_trans;
-//    std::string strbuf;
-//    while (std::getline(calib_file, strbuf)) {
-//      std::istringstream iss(strbuf);
-//      std::string pname;
-//      if (iss >> pname) {
-//        if (pname == "Tr:") {
-//          Eigen::Matrix3d rot_mat;
-//          for (int i = 0; i < 12; i++) {
-//            if (i % 4 == 3)
-//              iss >> calib_trans(i / 4);
-//            else
-//              iss >> rot_mat(i % 4, i / 4);
-//          }
-//          calib_rot_q = Eigen::Quaterniond(rot_mat);
-//          calib_set = true;
-//          break;
-//        }
-//      }
-//    }
-//    CHECK(calib_set);
-//    T_lc_velod_.setIdentity();
-//    T_lc_velod_.rotate(calib_rot_q);
-//    T_lc_velod_.pretranslate(calib_trans);
-//
-//    // 2. ts and gt left camera pose
-//    std::fstream ts_file, gt_pose_file;
-//    ts_file.open(f_seq_ts, std::ios::in);
-//    // the ts with the raw lidar data, and we select a segment that matches the sequence
-//    gt_pose_file.open(f_seq_gt_pose, std::ios::in);
-//    if (ts_file.rdstate() != std::ifstream::goodbit) {
-//      std::cout << "Cannot open ts" << f_seq_ts << ", returning..." << std::endl;
-//      return;
-//    }
-//    if (gt_pose_file.rdstate() != std::ifstream::goodbit) {
-//      std::cout << "Cannot open gt pose" << f_seq_gt_pose << ", returning..." << std::endl;
-//      return;
-//    }
-//
-////    int ts_cnt = 0;
-////    while (std::getline(ts_file, strbuf)) {
-////      std::istringstream iss(strbuf);
-////      std::string pname;
-////      if (iss >> pname) {
-////        if (ts_cnt >= seq_beg) {
-////
-////        }
-////        ts_cnt++;
-////      }
-////    }
-//
-//  }
+  void loadSeqGT(const std::string &f_seq_calib, const std::string &f_seq_gt_pose) {
+    // 1. calibration
+    std::fstream calib_file;
+    calib_file.open(f_seq_calib, std::ios::in);
+    if (calib_file.rdstate() != std::ifstream::goodbit) {
+      std::cout << "Cannot open calibration" << f_seq_calib << ", returning..." << std::endl;
+      return;
+    }
+    bool calib_set = false;
+    Eigen::Quaterniond calib_rot_q;
+    Eigen::Vector3d calib_trans;
+    std::string strbuf;
+    while (std::getline(calib_file, strbuf)) {
+      std::istringstream iss(strbuf);
+      std::string pname;
+      if (iss >> pname) {
+        if (pname == "Tr:") {
+          Eigen::Matrix3d rot_mat;
+          for (int i = 0; i < 12; i++) {
+            if (i % 4 == 3)
+              iss >> calib_trans(i / 4);
+            else
+              iss >> rot_mat(i / 4, i % 4);
+          }
+          calib_rot_q = Eigen::Quaterniond(rot_mat);
+          calib_set = true;
+          break;
+        }
+      }
+    }
+    CHECK(calib_set);
+    T_lc_velod_.setIdentity();
+    T_lc_velod_.rotate(calib_rot_q);
+    T_lc_velod_.pretranslate(calib_trans);
+
+    // 2. gt left camera pose
+    std::fstream gt_pose_file;
+    gt_pose_file.open(f_seq_gt_pose, std::ios::in);
+    if (gt_pose_file.rdstate() != std::ifstream::goodbit) {
+      std::cout << "Cannot open gt pose" << f_seq_gt_pose << ", returning..." << std::endl;
+      return;
+    }
+
+    Eigen::Isometry3d T_w_lc0;
+    T_w_lc0.setIdentity();
+
+    // moving along z to moving along y ()
+    T_w_lc0.rotate(Eigen::AngleAxisd(-M_PI / 2, Eigen::Vector3d(1, 0, 0)));  // TODO: for vis
+
+    while (std::getline(gt_pose_file, strbuf)) {
+      std::istringstream iss(strbuf);
+      Eigen::Isometry3d tmp_T_lc0_lc;  // raw gt poses are T_lc0_lc
+      Eigen::Vector3d tmp_trans;
+      Eigen::Matrix3d tmp_rot_mat;
+      Eigen::Quaterniond tmp_rot_q;
+
+      for (int i = 0; i < 12; i++) {
+        if (i % 4 == 3)
+          iss >> tmp_trans(i / 4);
+        else
+          iss >> tmp_rot_mat(i / 4, i % 4);
+      }
+
+      tmp_rot_q = Eigen::Quaterniond(tmp_rot_mat);
+      tmp_T_lc0_lc.setIdentity();
+      tmp_T_lc0_lc.rotate(tmp_rot_q);
+      tmp_T_lc0_lc.pretranslate(tmp_trans);
+
+      all_raw_gt_l_poses.emplace_back(T_w_lc0 * tmp_T_lc0_lc * T_lc_velod_);
+//      all_raw_gt_l_poses.emplace_back(tmp_T_lc0_lc);
+
+    }
+
+    printf("%lu gt poses loaded.\n", all_raw_gt_l_poses.size());
+  }
 
   void processOnce(int &cnt) {
 
@@ -193,9 +213,6 @@ public:
     if (!out_ptr)
       return;
 
-//    std::cout << out_ptr->size() << std::endl;
-//    std::cout << out_ptr->header.seq << std::endl;
-
     ros::Time time;
     time.fromNSec(out_ptr->header.stamp);
     if (!time_beg_set) {
@@ -203,19 +220,22 @@ public:
       time_beg_set = true;
     }
 
-    Eigen::Isometry3d T_gt_last; // velodyne to world transform
-
-    // TODO: Where do we get the gt?
-    // case 1: use gpx
-    T_gt_last = tf2::transformToEigen(tf_gt_last); // use looked up tf
-    // case 2: use sequence gt
-
     int scan_seq = lookupTs(time.toSec());
+    if (scan_seq < seq_beg || scan_seq > seq_end) {
+      printf("Index %d out of range [%d, %d].\n", scan_seq, seq_beg, seq_end);
+      return;
+    }
+
+    tf_gt_last = tf2::eigenToTransform(all_raw_gt_l_poses[scan_seq - seq_beg]); // case 2: use sequence gt
+
+    std::cout << "trans z: " << tf_gt_last.transform.translation.z << std::endl;
+
+    Eigen::Isometry3d T_gt_last; // velodyne to world transform
+    T_gt_last = tf2::transformToEigen(tf_gt_last); // use looked up tf
 
     Eigen::Vector3d time_translate(0, 0, 1);
     time_translate = time_translate * (time.toSec() - time_beg.toSec()) / 60;   // elevate 1m per minute
 
-//    T_gt_last.pretranslate(time_translate);
     gt_poses.emplace_back(T_gt_last);
     poses_time_z_shift.emplace_back(time_translate.z());
 
@@ -223,11 +243,8 @@ public:
     publishPath(time, tf_gt_last);
     publishScanSeqText(time, tf_gt_last, scan_seq);
 
-    printf("---\nour curr seq: %d, stamp: %lu\n", cnt, time.toNSec());
+    printf("---\nour counted seq: %d, kitti seq: %d, stamp: %lu\n", cnt, scan_seq, time.toNSec());
 
-    if (cnt == 1291) {
-      printf("Stop here\n");
-    }
 
     std::vector<std::pair<int, int>> new_lc_pairs;
 
@@ -269,6 +286,10 @@ public:
       // record "valid" loop closure
       auto tf_err = ConstellCorrelation::evalMetricEst(bev_tfs[j], gt_poses[new_lc_pairs.back().second],
                                                        gt_poses[new_lc_pairs.back().first], config);
+      double est_trans_norm2d = ConstellCorrelation::getEstSensTF(bev_tfs[j], config).translation().norm();
+      double gt_trans_norm3d = (gt_poses[new_lc_pairs.back().first].translation() -
+                                gt_poses[new_lc_pairs.back().second].translation()).norm();
+      printf(" Dist: Est2d: %.2f; GT3d: %.2f\n", est_trans_norm2d, gt_trans_norm3d);
 
       // metric error benchmark
       double err_vec[3] = {tf_err.translation().x(), tf_err.translation().y(), std::atan2(tf_err(1, 0), tf_err(0, 0))};
@@ -278,12 +299,13 @@ public:
       printf(" Error mean: t:%7.4f, r:%7.4f of %d lc\n", trans_rmse.getMean(), rot_rmse.getMean(), trans_rmse.cnt_sqs);
       printf(" Error rmse: t:%7.4f, r:%7.4f\n", trans_rmse.getRMSE(), rot_rmse.getRMSE());
 
-      if ((gt_poses[new_lc_pairs.back().first].translation() -
-           gt_poses[new_lc_pairs.back().second].translation()).norm() < 4.0 || tf_err.translation().norm() < 2.0) {
+      if (gt_trans_norm3d < 4.0) {
+//           gt_poses[new_lc_pairs.back().second].translation()).norm() < 4.0 || tf_err.translation().norm() < 2.0) {
         // TODO: this judgement is based on the assumption that only one candidate is returned.
         has_tp_lc = true;
       } else {
-        has_fp_lc = true;
+        if (est_trans_norm2d < 4.0)
+          has_fp_lc = true;
       }
 
       // write file
@@ -423,10 +445,16 @@ int main(int argc, char **argv) {
   google::InitGoogleLogging(argv[0]);
 
   printf("tag 0\n");
-  RosBagPlayLoopTest o(nh);
 
+  uint64_t t_seq_beg = 100000;
+  int p1 = 0, p2 = 2760;
   std::string ts_path = "/home/lewis/catkin_ws2/src/contour-context/results/kitti_seq05_seconds.txt";
+  std::string gt_pose_path = "/home/lewis/Downloads/KITTI_data/dataset_gt/poses/05.txt";
+  std::string seq_calib_path = "/home/lewis/Downloads/KITTI_data/dataset/sequences/05/calib.txt";
+
+  RosBagPlayLoopTest o(nh, p1, p2, t_seq_beg);
   o.loadRawTs(ts_path);
+  o.loadSeqGT(seq_calib_path, gt_pose_path);
 
   ros::Rate rate(50);
   int cnt = 0;
