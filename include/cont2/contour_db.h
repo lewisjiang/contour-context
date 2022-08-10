@@ -7,6 +7,7 @@
 
 #include "cont2/contour_mng.h"
 #include "cont2/correlation.h"
+#include "tools/algos.h"
 
 #include <memory>
 #include <algorithm>
@@ -592,18 +593,76 @@ struct CandSimScore {
 // src/history/old cms that are considered as its loop closure candidates, each with a matching hint in the form of a
 // certain retrieval key (since a cm has many keys) and the key's BCI.
 // 2. When feeding in a given candidate, we progressively calculate and check the similarity score and discard it once
-// any dimension falls below threshold. For a candidate with multiple hints, we choose the "most similar" one before the
-// calculation of any continuous correlation score???.
-// 3. After getting the best of each candidate for all the candidates, we sort them according to ??? and select the top
-// several to further optimize and calculate the correlation score (If all the candidates are required, we optimize them
-// all). All the remaining candidates are predicted as positive, and the user can request "top-1" for protocol 1 and
-// "all" for protocol 2.
+// any dimension falls below threshold. For a candidate with multiple hints, we combine results from them and remove
+// outliers before the calculation of any continuous correlation score.
+// 3. After getting the best est of each candidate for all the candidates, we sort them according to some partial order
+// and select the top several to further optimize and calculate the correlation score (If all the candidates are
+// required, we optimize them all). All the remaining candidates are predicted as positive, and the user can request
+// "top-1" for protocol 1 and "all" for protocol 2.
 struct CandidateManager {
-  struct CandidateData {
-    std::shared_ptr<const ContourManager> cm_cand_;
-    std::unique_ptr<ConstellCorrelation> corr_est_;
-    Eigen::Isometry2d T_delta_;  // transform candidate into tgt/curr/query/new frame
+  // It is possible that multiple key/bci matches (pass the checks with different TF) correspond to the same pose, so
+  // we record the potential proposals and find the most likely one after checking all the candidates.
+  struct CandidateAnchorProp {
+    std::set<ConstellationPair> constell_;  // set of constellation matches
+    Eigen::Isometry2d T_delta_;  // the key feature that distinguishes different proposals
     CandSimScore sim_score_;
+    int vote_cnt_ = 0;  // cnt of matched contours voting for this TF (not cnt of unique pairs)
+  };
+
+  ///
+  struct CandidatePoseData {
+    std::shared_ptr<const ContourManager> cm_cand_;
+    std::unique_ptr<ConstellCorrelation> corr_est_;  // generate the correlation estimator after polling all the cands
+    std::vector<CandidateAnchorProp> anch_props_;
+
+    // TODO: add a anchor proposal, either merge or create new in `anch_props_`
+    void addProposal(const Eigen::Isometry2d &T_prop, const std::vector<ConstellationPair> &sim_pairs) {
+      DCHECK_GT(sim_pairs.size(), 3);  // hard bottom line
+
+      for (int i = 0; i < anch_props_.size(); i++) {
+        const Eigen::Isometry2d delta_T = T_prop.inverse() * anch_props_[i].T_delta_;
+        // TODO: hardcoded threshold: 2.0m, 0.3.rad
+        if (delta_T.translation().norm() < 2.0 && std::abs(std::atan2(delta_T(1, 0), delta_T(0, 0))) < 0.3) {
+          for (const auto &pr: sim_pairs)
+            anch_props_[i].constell_.insert(pr);  // unique
+
+          anch_props_[i].vote_cnt_ += sim_pairs.size();  // not unique
+          // TODO: Do we need the `CandSimScore` object?
+          anch_props_[i].sim_score_.cnt_pairwise_sim_ = std::max(anch_props_[i].sim_score_.cnt_pairwise_sim_,
+                                                                 (int) sim_pairs.size());
+          // TODO: Do we need to re-estimate the TF? Or just blend (manipulate with TF param and weights)?
+//            anch_props_[i].T_delta_ = ContourManager::getTFFromConstell();
+          int w1 = anch_props_[i].vote_cnt_, w2 = sim_pairs.size();
+          Eigen::Vector2d trans_bl =
+              (anch_props_[i].T_delta_.translation() * w1 + T_prop.translation() * w2) / (w1 + w2);
+          double ang1 = std::atan2(anch_props_[i].T_delta_(1, 0), anch_props_[i].T_delta_(0, 0));
+          double ang2 = std::atan2(T_prop(1, 0), T_prop(0, 0));
+
+          double diff = ang2 - ang1;
+          if (diff < 0) diff += 2 * M_PI;
+          if (diff > M_PI) diff -= 2 * M_PI;
+          double ang_bl = diff * w2 / (w1 + w2) + ang1;
+
+          anch_props_[i].T_delta_.setIdentity();
+          anch_props_[i].T_delta_.rotate(ang_bl);  // no need to clamp
+          anch_props_[i].T_delta_.pretranslate(trans_bl);
+
+          return;  // greedy
+        }
+      }
+
+      if (anch_props_.size() > 3)
+        return; // limit the number of different proposals
+
+      // empty set or no similar proposal
+      anch_props_.emplace_back();
+      anch_props_.back().T_delta_ = T_prop;
+      for (const auto &pr: sim_pairs)
+        anch_props_.back().constell_.insert(pr);
+      anch_props_.back().vote_cnt_ = sim_pairs.size();
+      anch_props_.back().sim_score_.cnt_pairwise_sim_ = sim_pairs.size();
+
+    }
   };
 
   CandSimScore score_lb_;  // score lower bound
@@ -611,96 +670,163 @@ struct CandidateManager {
 
   // data structure
   std::map<int, int> cand_id_pos_pair_;
-  std::vector<CandidateData> candidates_;
+  std::vector<CandidatePoseData> candidates_;
 
   // bookkeeping:
   bool adding_finished = false;
-  int num_aft_check1 = 0;
-  int num_aft_check2 = 0;
-  int num_aft_check3 = 0;
-  int num_aft_check4 = 0;
+  int cand_aft_check1 = 0;  // number of candidate occurrence (not unique places) after each check
+  int cand_aft_check2 = 0;
+  int cand_aft_check3 = 0;
+  int cand_aft_check4 = 0;
 
   CandidateManager(std::shared_ptr<const ContourManager> cm_q,
                    const CandSimScore &score_lb) : cm_tgt_(std::move(cm_q)), score_lb_(score_lb) {}
 
-  // "hint": the key pairing and the bci pairing
-  bool checkCandWithHint(const std::shared_ptr<const ContourManager> &cm_cand, const ConstellationPair &anchor_pair) {
+  /// Main func 1/3: check possible anchor pairing and add to the database
+  /// \param cm_cand contour manager for the candidate
+  /// \param anchor_pair "hint": the anchor for key and bci pairing
+  /// \return
+  std::array<int, 4> checkCandWithHint(const std::shared_ptr<const ContourManager> &cm_cand,
+                                       const ConstellationPair &anchor_pair) {
     CHECK(!adding_finished);
     int cand_id = cm_cand->getIntID();
     CandSimScore curr_score;
 
+    // count the number of passed contour pairs in each check
+    std::array<int, 4> cnt_pass = {0, 0, 0, 0};  // 0: anchor sim; 1: constell sim; 2: constell corresp sim; 3:
+    // Q: is it the same as `curr_score`?
+
     // check: (1/3) anchor similarity
     bool anchor_sim = ContourManager::checkContPairSim(*cm_cand, *cm_tgt_, anchor_pair);
+    cnt_pass[0] = int(anchor_sim);
     if (!anchor_sim)
-      return false;
-    num_aft_check1++;
+      return cnt_pass;
+    cand_aft_check1++;
 
     // check (2/3): pure constellation check
-    std::vector<ConstellationPair> tmp_pairs;
+    std::vector<ConstellationPair> tmp_pairs1;
+    // TODO: dynamic thresholding
     int num_constell_pairs = BCI::checkConstellSim(cm_cand->getBCI(anchor_pair.level, anchor_pair.seq_src),
-                                                   cm_tgt_->getBCI(anchor_pair.level, anchor_pair.seq_tgt), tmp_pairs);
+                                                   cm_tgt_->getBCI(anchor_pair.level, anchor_pair.seq_tgt), tmp_pairs1);
+    cnt_pass[1] = num_constell_pairs;
     if (num_constell_pairs < score_lb_.cnt_constell_)
-      return false;
+      return cnt_pass;
     curr_score.cnt_constell_ = num_constell_pairs;
-    num_aft_check2++;
+    cand_aft_check2++;
 
     // check (3/3): individual similarity check
-    std::vector<int> tmp_sim_idx;  // the index of contours in tmp_pairs after individual check
-    std::pair<Eigen::Isometry2d, int> mat_res;
-    mat_res = ContourManager::calcScanCorresp(*cm_cand, *cm_tgt_, tmp_pairs, tmp_sim_idx,
-                                              score_lb_.cnt_pairwise_sim_);  // 5: minimal remaining pairs required
-    if (mat_res.second < score_lb_.cnt_pairwise_sim_)
-      return false;
-    curr_score.cnt_pairwise_sim_ = mat_res.second;
-    num_aft_check3++;
+    std::vector<ConstellationPair> tmp_pairs2;
+    int pairwise_sim_cnt;
+    // TODO: dynamic thresholding
+    pairwise_sim_cnt = ContourManager::checkConstellCorrespSim(*cm_cand, *cm_tgt_, tmp_pairs1, tmp_pairs2,
+                                                               score_lb_.cnt_pairwise_sim_);
+    cnt_pass[2] = pairwise_sim_cnt;
+    if (pairwise_sim_cnt < score_lb_.cnt_pairwise_sim_)
+      return cnt_pass;
+    curr_score.cnt_pairwise_sim_ = pairwise_sim_cnt;
+    cand_aft_check3++;
 
-    // correlation calculation
+    // Now we assume the pair has passed all the tests. We will add the results to the candidate data structure
+    // Get the transform between the two scans
+    Eigen::Isometry2d T_pass = ContourManager::getTFFromConstell(*cm_cand, *cm_tgt_, tmp_pairs2.begin(),
+                                                                 tmp_pairs2.end());
+
+    // add to/update candidates_
     auto cand_it = cand_id_pos_pair_.find(cand_id);
-    if (cand_it != cand_id_pos_pair_.end() &&
-        curr_score < candidates_[cand_it->second].sim_score_)  // if a better candidate rep exists
-      return false;
-
-    GMMOptConfig gmm_config;
-    std::unique_ptr<ConstellCorrelation> corr_est(new ConstellCorrelation(gmm_config));
-    double corr_score_init = corr_est->initProblem(*cm_cand, *cm_tgt_, mat_res.first);
-    if (corr_score_init < score_lb_.correlation_)
-      return false;
-    num_aft_check4++;
-
-    curr_score.correlation_ = corr_score_init;
-
-    // add to database
     if (cand_it != cand_id_pos_pair_.end()) {
-      auto &existing_cand = candidates_[cand_it->second];
-      if (curr_score < existing_cand.sim_score_)
-        return false;
-      else {
-        existing_cand.sim_score_ = curr_score;
-        existing_cand.T_delta_ = mat_res.first;
-        existing_cand.cm_cand_ = cm_cand;
-        existing_cand.corr_est_ = std::move(corr_est);
-      }
+      // the candidate pose exists
+      candidates_[cand_it->second].addProposal(T_pass, tmp_pairs2);
     } else {
-      CandidateData new_cand;
-      new_cand.sim_score_ = curr_score;
-      new_cand.T_delta_ = mat_res.first;
+      // add new
+      CandidatePoseData new_cand;
       new_cand.cm_cand_ = cm_cand;
-      new_cand.corr_est_ = std::move(corr_est);
+      new_cand.addProposal(T_pass, tmp_pairs2);
       cand_id_pos_pair_.insert({cand_id, candidates_.size()});
       candidates_.emplace_back(std::move(new_cand));
     }
 
-    return true;
 
-    // TODO: check results of each level when fine tuning for recall:
-//    if (num_aft_check1) {
-//      printf("L:%d S:%d. After check 1: %d\n", q_levels_[ll], seq, num_aft_check1);
-//      printf("L:%d S:%d. After check 2: %d\n", q_levels_[ll], seq, num_aft_check2);
-//      printf("L:%d S:%d. After check 3: %d\n", q_levels_[ll], seq, num_aft_check3);
+    // correlation calculation
+    // TODO: merge results for the same candidate pose
+
+
+//    GMMOptConfig gmm_config;
+//    std::unique_ptr<ConstellCorrelation> corr_est(new ConstellCorrelation(gmm_config));
+//    double corr_score_init = corr_est->initProblem(*cm_cand, *cm_tgt_, T_pass);
+//    printf("init corr score: %f\n", corr_score_init);
+//    if (corr_score_init < score_lb_.correlation_)
+//      return cnt_pass;
+//    cand_aft_check4++;
+
+//    curr_score.correlation_ = corr_score_init;
+//
+//    // add to database
+//    if (cand_it != cand_id_pos_pair_.end()) {
+//      auto &existing_cand = candidates_[cand_it->second];
+//      if (curr_score < existing_cand.sim_score_)
+//        return cnt_pass;
+//      else {
+//        existing_cand.sim_score_ = curr_score;
+//        existing_cand.T_delta_ = mat_res.first;
+//        existing_cand.cm_cand_ = cm_cand;
+//        existing_cand.corr_est_ = std::move(corr_est);
+//      }
+//    } else {
+//      CandidatePoseData new_cand;
+//      new_cand.sim_score_ = curr_score;
+//      new_cand.T_delta_ = mat_res.first;
+//      new_cand.cm_cand_ = cm_cand;
+//      new_cand.corr_est_ = std::move(corr_est);
+//      cand_id_pos_pair_.insert({cand_id, candidates_.size()});
+//      candidates_.emplace_back(std::move(new_cand));
 //    }
+
+    return cnt_pass;
+  }
+
+  // "anchor" is no longer meaningful, since we've established constellations beyond any single anchor BCI can offrt
+  void tidyUpCandidates() {
+    adding_finished = true;
+    GMMOptConfig gmm_config;
+    printf("Tidy up candidates\n");
+
+    // analyze the anchor pairs for each pose
+    for (auto &candidate: candidates_) {
+      DCHECK(!candidate.anch_props_.empty());
+      // find the best T_init for setting up correlation problem estimation (based on vote)
+      int idx_sel = 0;
+      for (int i = 1; i < candidate.anch_props_.size(); i++) {
+        if (candidate.anch_props_[i].vote_cnt_ > candidate.anch_props_[idx_sel].vote_cnt_)
+          idx_sel = i;
+      }
+      // put the best prop to the first and leave the rest as they are
+      std::swap(candidate.anch_props_[0], candidate.anch_props_[idx_sel]);
+
+      // set up the correlation optimization problem for each candidate pose
+      std::unique_ptr<ConstellCorrelation> corr_est(new ConstellCorrelation(gmm_config));
+      double corr_score_init = corr_est->initProblem(*(candidate.cm_cand_), *cm_tgt_,
+                                                     candidate.anch_props_[0].T_delta_);
+      candidate.anch_props_[0].sim_score_.correlation_ = corr_score_init;
+      candidate.corr_est_ = std::move(corr_est);
+
+      printf("Cand id:%d, init corr: %f @max# %d votes\n", candidate.cm_cand_->getIntID(), corr_score_init,
+             candidate.anch_props_[0].vote_cnt_);
+
+
+      // TODO: find the best T_best for optimization init guess (based on problem->Evaluate())
+      // Is it necessary?
+
+    }
+
 
   }
 
+  /// Main func 2/3: pre select hopeful pose candidates, and optimize for finer pose estimations.
+  /// \param top_n
+  /// \param res_cand
+  /// \param res_corr
+  /// \param res_T
+  /// \return
   int
   fineOptimize(int top_n, std::vector<std::shared_ptr<const ContourManager>> &res_cand, std::vector<double> &res_corr,
                std::vector<Eigen::Isometry2d> &res_T) {
@@ -713,33 +839,42 @@ struct CandidateManager {
     if (candidates_.empty())
       return 0;
 
-    std::sort(candidates_.begin(), candidates_.end(), [&](const CandidateData &d1, const CandidateData &d2) {
+    std::sort(candidates_.begin(), candidates_.end(), [&](const CandidatePoseData &d1, const CandidatePoseData &d2) {
+      return d1.anch_props_[0].vote_cnt_ > d2.anch_props_[0].vote_cnt_;  // anch_props_ is guaranteed to be non-empty
 //      return d1.sim_score_ > d2.sim_score_;
-      return d1.sim_score_.correlation_ > d2.sim_score_.correlation_;
+//      return d1.sim_score_.correlation_ > d2.sim_score_.correlation_;
     });
 
-    int ret_size = std::min(top_n, (int) candidates_.size());
-    for (int i = 0; i < ret_size; i++) {
+    int pre_sel_size = std::min(top_n, (int) candidates_.size());
+    for (int i = 0; i < pre_sel_size; i++) {
       auto tmp_res = candidates_[i].corr_est_->calcCorrelation();
-      candidates_[i].sim_score_.correlation_ = tmp_res.first;
-      candidates_[i].T_delta_ = tmp_res.second;
+      candidates_[i].anch_props_[0].sim_score_.correlation_ = tmp_res.first;
+      candidates_[i].anch_props_[0].T_delta_ = tmp_res.second;
     }
 
-    std::sort(candidates_.begin(), candidates_.begin() + ret_size,
-              [&](const CandidateData &d1, const CandidateData &d2) {
+    std::sort(candidates_.begin(), candidates_.begin() + pre_sel_size,
+              [&](const CandidatePoseData &d1, const CandidatePoseData &d2) {
 //                return d1.sim_score_ > d2.sim_score_;
-                return d1.sim_score_.correlation_ > d2.sim_score_.correlation_;
+//                return d1.sim_score_.correlation_ > d2.sim_score_.correlation_;
+                return d1.anch_props_[0].sim_score_.correlation_ > d2.anch_props_[0].sim_score_.correlation_;
               });
 
     printf("Fine optim corr:\n");
+    int ret_size = 1;  // the needed
     for (int i = 0; i < ret_size; i++) {
       res_cand.emplace_back(candidates_[i].cm_cand_);
-      res_corr.emplace_back(candidates_[i].sim_score_.correlation_);
-      res_T.emplace_back(candidates_[i].T_delta_);
-      printf("correlation: %f\n", candidates_[i].sim_score_.correlation_);
+      res_corr.emplace_back(candidates_[i].anch_props_[0].sim_score_.correlation_);
+      res_T.emplace_back(candidates_[i].anch_props_[0].T_delta_);
+      printf("correlation: %f\n", candidates_[i].anch_props_[0].sim_score_.correlation_);
     }
 
     return ret_size;
+  }
+
+  // TODO: We hate censorship but this makes output data look pretty.
+  // We remove candidates with a MPE trans norm greater than the TP threshold.
+  void selfCensor() {
+
   }
 
 };
@@ -793,7 +928,7 @@ public:
     // for each layer
 //    std::set<size_t> matched_gidx;
     for (int ll = 0; ll < q_levels_.size(); ll++) {
-      std::vector<BCI> q_bcis = q_ptr->getLevBCI(q_levels_[ll]);
+      const std::vector<BCI> &q_bcis = q_ptr->getLevBCI(q_levels_[ll]);
       std::vector<RetrievalKey> q_keys = q_ptr->getLevRetrievalKey(q_levels_[ll]);
       DCHECK_EQ(q_bcis.size(), q_keys.size());
       for (int seq = 0; seq < q_bcis.size(); seq++) {
@@ -832,8 +967,8 @@ public:
           // 2. check
           for (const auto &sear_res: tmp_res) {
             clk.tic();
-            bool add_one = cand_mng.checkCandWithHint(all_bevs_[sear_res.first.gidx],
-                                                      ConstellationPair(q_levels_[ll], sear_res.first.seq, seq));
+            auto cnt_chk_pass = cand_mng.checkCandWithHint(all_bevs_[sear_res.first.gidx],
+                                                           ConstellationPair(q_levels_[ll], sear_res.first.seq, seq));
             t2 += clk.toc();
           }
 
@@ -842,7 +977,7 @@ public:
     }
 
     // find the best ones with fine tuning:
-    const int top_n = 1;
+    const int top_n = 5;
     std::vector<std::shared_ptr<const ContourManager>> res_cand_ptr;
     std::vector<double> res_corr;
     std::vector<Eigen::Isometry2d> res_T;
@@ -852,10 +987,10 @@ public:
     t5 += clk.toc();
 
     if (num_best_cands) {
-      printf("After check 1: %d\n", cand_mng.num_aft_check1);
-      printf("After check 2: %d\n", cand_mng.num_aft_check2);
-      printf("After check 3: %d\n", cand_mng.num_aft_check3);
-      printf("After check 4: %d\n", cand_mng.num_aft_check4);
+      printf("After check 1: %d\n", cand_mng.cand_aft_check1);
+      printf("After check 2: %d\n", cand_mng.cand_aft_check2);
+      printf("After check 3: %d\n", cand_mng.cand_aft_check3);
+      printf("After check 4: %d\n", cand_mng.cand_aft_check4);
     } else {
       printf("No candidates are valid after checks.\n");
     }

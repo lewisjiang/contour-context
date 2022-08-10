@@ -273,33 +273,34 @@ struct ContourView {
 //    std::pair<Eigen::Isometry2d, bool> ret(Eigen::Isometry2d(), false);
     bool ret = false;
     // 1. area, 2.3. eig, 4. com;
-    if (diff_perc<float>(cont_src.cell_cnt_, cont_tgt.cell_cnt_, 0.2f)) {  // TODO: skip this for points
-//      printf("\tCell cnt not pass.\n");
-      return ret;
-    }
-
-    if (std::max(cont_src.cell_cnt_, cont_tgt.cell_cnt_) > 15 &&
-        diff_delt<float>(cont_src.vol3_mean_, cont_tgt.vol3_mean_, 0.3f)) {
-//      printf("\tAvg height not pass.\n");
+    if (diff_perc<float>(cont_src.cell_cnt_, cont_tgt.cell_cnt_, 0.2f)
+        && diff_delt<float>(cont_src.cell_cnt_, cont_tgt.cell_cnt_, 6.0f)) {
+      printf("\tCell cnt not pass.\n");
       return ret;
     }
 
     if (std::max(cont_src.eig_vals_(1), cont_tgt.eig_vals_(1)) > 2.0 &&
         diff_perc<float>(std::sqrt(cont_src.eig_vals_(1)), std::sqrt(cont_tgt.eig_vals_(1)), 0.2f)) {
-//      printf("\tBig eigval not pass.\n");
+      printf("\tBig eigval not pass.\n");
       return ret;
     }
 
-    if (std::max(cont_src.eig_vals_(0), cont_tgt.eig_vals_(0)) > 1.0 &&
+    if (std::max(cont_src.eig_vals_(0), cont_tgt.eig_vals_(0)) > 2.0 &&
         diff_perc<float>(std::sqrt(cont_src.eig_vals_(0)), std::sqrt(cont_tgt.eig_vals_(0)), 0.2f)) {
-//      printf("\tSmall eigval not pass.\n");
+      printf("\tSmall eigval not pass.\n");
       return ret;
     }
 
-    if (std::max((cont_src.com_ - cont_src.pos_mean_).norm(), (cont_tgt.com_ - cont_tgt.pos_mean_).norm()) > 0.5 &&
-        diff_perc<float>((cont_src.com_ - cont_src.pos_mean_).norm(), (cont_tgt.com_ - cont_tgt.pos_mean_).norm(),
-                         0.25f)) {
-//      printf("\tCom radius not pass.\n");
+    if (std::max(cont_src.cell_cnt_, cont_tgt.cell_cnt_) > 15 &&
+        diff_delt<float>(cont_src.vol3_mean_, cont_tgt.vol3_mean_, 0.3f)) {
+      printf("\tAvg height not pass.\n");
+      return ret;
+    }
+
+    const float com_r1 = (cont_src.com_ - cont_src.pos_mean_).norm();
+    const float com_r2 = (cont_tgt.com_ - cont_tgt.pos_mean_).norm();
+    if (diff_delt<float>(com_r1, com_r2, 0.4f) && diff_perc<float>(com_r1, com_r2, 0.25f)) {
+      printf("\tCom radius not pass.\n");
       return ret;
     }
 

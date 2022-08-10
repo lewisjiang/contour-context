@@ -16,7 +16,7 @@ struct GMMOptConfig {
   double max_corr_dist_ = 10.0; // in bev pixels
   double min_area_perc_ = 0.95; // minimal percentage of area involved for each layer
   std::vector<int> levels_ = {1, 2, 3, 4}; // the layers to be considered in ellipse gmm.
-  double cov_dilate_scale_ = 4.0;
+  double cov_dilate_scale_ = 2.0;
 };
 
 
@@ -81,7 +81,7 @@ struct GMMPair {
       total_cells_tgt_ += tgt_cell_cnts_.back();
     }
 
-    // pre select (need initial guess)
+    // pre-select (need initial guess)
     int total_pairs = 0;
     for (int li = 0; li < ellipses_src.size(); li++) {
       for (int si = 0; si < ellipses_src[li].size(); si++) {
@@ -154,7 +154,7 @@ struct GMMPair {
 //! Constellation correlation
 class ConstellCorrelation {
   GMMOptConfig cfg_;
-  std::unique_ptr<ceres::GradientProblem> problem_ptr;
+  std::unique_ptr<ceres::GradientProblem> problem_ptr = nullptr;
   double auto_corr_src{}, auto_corr_tgt{};
   Eigen::Isometry2d T_best_;
 
@@ -165,7 +165,11 @@ public:
     T_best_.setIdentity();
   };
 
-  // split init cost calc from full optimization, in case of too many candidates
+  /// Split init cost calc from full optimization, in case of too many candidates
+  /// \param cm_src
+  /// \param cm_tgt
+  /// \param T_init should be the best possible, because we use it to simplify weak correlation pairs.
+  /// \return
   double initProblem(const ContourManager &cm_src, const ContourManager &cm_tgt, const Eigen::Isometry2d &T_init) {
 //    printf("Param before opt:\n");
 //    for (auto dat: parameters) {
@@ -175,19 +179,26 @@ public:
 
     T_best_ = T_init;
     std::unique_ptr<GMMPair> ptr_gmm_pair(new GMMPair(cm_src, cm_tgt, cfg_, T_init));
-    double parameters[3] = {T_init(0, 2), T_init(1, 2),
-                            std::atan2(T_init(1, 0),
-                                       T_init(0, 0))}; // set according to the constellation output.
 
     auto_corr_src = ptr_gmm_pair->auto_corr_src_;
     auto_corr_tgt = ptr_gmm_pair->auto_corr_tgt_;
     problem_ptr = std::make_unique<ceres::GradientProblem>(
         new ceres::AutoDiffFirstOrderFunction<GMMPair, 3>(ptr_gmm_pair.release()));
 
+    return tryProblem(T_init);
+  }
+
+  /// Get the correlation under a certain transform
+  /// \param T_try The TF under which to get the correlation. Big diff between T_init and T_try will cause problems.
+  /// \return
+  double tryProblem(const Eigen::Isometry2d &T_try) const {
+    DCHECK(problem_ptr);
+    double parameters[3] = {T_try(0, 2), T_try(1, 2), std::atan2(T_try(1, 0), T_try(0, 0))}; //
     double cost[1] = {0};
     problem_ptr->Evaluate(parameters, cost, nullptr);
-    return -cost[0] / std::sqrt(auto_corr_src * auto_corr_tgt);;  // correlation at initial cost
+    return -cost[0] / std::sqrt(auto_corr_src * auto_corr_tgt);
   }
+
 
   // T_tgt (should)= T_delta * T_src
   std::pair<double, Eigen::Isometry2d> calcCorrelation() {
@@ -258,8 +269,26 @@ public:
     T_tsen_ssen2_gt.rotate(std::atan2(R_rectified(1, 0), R_rectified(0, 0)));
     T_tsen_ssen2_gt.pretranslate(Eigen::Vector2d(T_tsen_ssen3.translation().segment(0, 2)));  // only xy
 
+    std::cout << "T delta gt 2d:\n" << T_tsen_ssen2_gt.matrix() << std::endl;  // Note T_delta is not comparable to this
+
     Eigen::Isometry2d T_gt_est = T_tsen_ssen2_gt.inverse() * T_tsen_ssen2_est;
     return T_gt_est;
+  }
+
+  /// Get estimated transform between sensors.
+  ///  T_tgt = T_delta * T_src, image orig frame, while this one is in sensor frame
+  /// \param T_delta
+  /// \param bev_config
+  /// \return
+  static Eigen::Isometry2d getEstSensTF(const Eigen::Isometry2d &T_delta, const ContourManagerConfig &bev_config) {
+    // ignore non-square resolution for now:
+    CHECK_EQ(bev_config.reso_row_, bev_config.reso_col_);
+
+    Eigen::Isometry2d T_so_ssen = Eigen::Isometry2d::Identity(), T_to_tsen;  // {}_sensor in {}_bev_origin frame
+    T_so_ssen.translate(V2D(bev_config.n_row_ / 2 - 0.5, bev_config.n_col_ / 2 - 0.5));
+    T_to_tsen = T_so_ssen;
+    Eigen::Isometry2d T_tsen_ssen2_est = T_to_tsen.inverse() * T_delta * T_so_ssen; // sensor in sensor frame: dist
+    return T_tsen_ssen2_est;
   }
 
 };

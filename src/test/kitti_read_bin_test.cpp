@@ -104,11 +104,12 @@ int main(int argc, char **argv) {
 
   printf("read bin start 0\n");
 
+  // kitti 05
   std::string kitti_raw_dir = "/home/lewis/Downloads/datasets/kitti_raw", date = "2011_09_30", seq = "2011_09_30_drive_0018_sync";
   ReadKITTILiDAR reader(kitti_raw_dir, date, seq);
 
 //  // visualize gt poses and index
-//  KittiBinDataVis data_test(nh, reader.getGtImuPoses());
+//  KittiBinDataVis data_test(nh, reader.getGNSSImuPoses());
 //  ros::Rate rate(1);
 //  while (ros::ok()) {
 //    ros::spinOnce();
@@ -123,7 +124,14 @@ int main(int argc, char **argv) {
 //  int idx_old = 805, idx_new = 2576;
 //  int idx_old = 80, idx_new = 2481; // the return to the first turning
 
-  int idx_old = 558, idx_new = 1316;
+//  int idx_old = 558, idx_new = 1316;
+//  int idx_old = 769, idx_new = 1512;
+
+//  int idx_old = 895, idx_new = 2632;  // final straight road loop
+//  int idx_old = 905, idx_new = 2636;  // final straight road loop
+//  int idx_old = 890, idx_new = 2632;  // final straight road loop
+
+  int idx_old = 806, idx_new = 1562;  // seek farther. 1562:793, 1563:816, nearest old: 808
 
 
   std::string s_old, s_new;
@@ -148,60 +156,80 @@ int main(int argc, char **argv) {
   printf("Analysing %s-%s\n", cmng_ptr_old->getStrID().c_str(), cmng_ptr_new->getStrID().c_str());
 
   // test 1. manual compare
-  // find the nearest keys in each level: and calculate similarity
+  // Given a pair of scans, find the best possible LC param, via all possible matching combinations.
+  // That is to say, traverse over all possible pairs of keys, and find the best possible LC.
+  // The workflow should be similar to `queryRangedKNN()`'s checking
   Eigen::Isometry2d T_init;
   T_init.setIdentity();
-  std::vector<ConstellationPair> best_level_match;
-  printf("Keys:\n");
+
+  CandSimScore score_lb(10, 5, 0.65);
+  CandidateManager cand_mng(cmng_ptr_new, score_lb);
+
+  printf("Keys:\n"); // as if adding retrieved keys (search results) in `queryRangedKNN()`.
   for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
     printf("\n---\nPermu Level %d\n", ll);
     auto keys1 = cmng_ptr_old->getLevRetrievalKey(ll);
     auto keys2 = cmng_ptr_new->getLevRetrievalKey(ll);
-    auto bcis1 = cmng_ptr_old->getLevBCI(ll);
-    auto bcis2 = cmng_ptr_new->getLevBCI(ll);
 
-    KeyFloatType best_key_diff = 1e9;
-    int seq1 = -1, seq2 = -1;
-
-    // find the best key match in each level
+    // test all possible key pairs
     for (int i1 = 0; i1 < keys1.size(); i1++) {
       for (int i2 = 0; i2 < keys2.size(); i2++) {
         const auto &k1 = keys1[i1];
         const auto &k2 = keys2[i2];
+
+        // basic key checks:
         if (k1.sum() == 0 || k2.sum() == 0)
           continue;
-
         KeyFloatType tmp_dist = (k1 - k2).squaredNorm();
-
-        if (tmp_dist < best_key_diff) {  // find best anchor pair
-          seq1 = i1;
-          seq2 = i2;
-          best_key_diff = tmp_dist;
-        }
         if (tmp_dist > 1000.0f)
           continue;
 
         printf("BF key diff: %d %d %10.4f, ", i1, i2, tmp_dist);
 
         // check sim step by step:
-        CandSimScore score_lb(10, 5, 0.65);
-        CandidateManager cand_mng(cmng_ptr_new, score_lb);
 
-        ConstellationPair tmp_pair(ll, i1, i2);
-        cand_mng.checkCandWithHint(cmng_ptr_old, tmp_pair);
+        ConstellationPair piv_pair(ll, i1, i2);
+        std::array<int, 4> cnt_pass = cand_mng.checkCandWithHint(cmng_ptr_old, piv_pair);
+        printf("key check res: %d, ", int(cnt_pass[3]));
 
-        printf("After checks: %d, %d, %d, %d\n", cand_mng.num_aft_check1, cand_mng.num_aft_check2,
-               cand_mng.num_aft_check3, cand_mng.num_aft_check4);
+        printf("Each check: %d, %2d, %2d, %d\n", cnt_pass[0], cnt_pass[1], cnt_pass[2], cnt_pass[3]);
 
       }
     }
     printf("BF level compare key finished.\n");
-    if (seq1 < 0 || seq2 < 0) {
-      printf("No valid key pairs.\n");
-      continue;
-    }
+  }
 
+//  // manual constellation case 1: combine 2 matches from different anchors
+//  std::vector<ConstellationPair> cstl; // for '806', '1562'
+//  cstl.emplace_back(1, 0, 0);
+//  cstl.emplace_back(1, 3, 1);
+//  cstl.emplace_back(2, 6, 4);
+//  cstl.emplace_back(2, 9, 8);
+//  cstl.emplace_back(3, 2, 1);
+//  cstl.emplace_back(4, 0, 0);
+//  cstl.emplace_back(4, 8, 7);
+//  // Add some "invalid pairs"
+//  cstl.emplace_back(1, 8, 9);  // Com radius not pass.
+//  cstl.emplace_back(1, 4, 8);  // Cell cnt not pass.
+//  cstl.emplace_back(2, 3, 1);  // Cell cnt not pass.
+////  cstl.emplace_back(1, 4, 8);  //
+////  cstl.emplace_back(1, 4, 8);  //
+//
+//  T_init = ContourManager::getTFFromConstell(*cmng_ptr_old, *cmng_ptr_new, cstl.begin(), cstl.end());
 
+  printf("\n===\nPolling over candidate keys finished.\n\n");
+
+  cand_mng.tidyUpCandidates();
+
+  const int top_n = 5;
+  std::vector<std::shared_ptr<const ContourManager>> res_cand_ptr;
+  std::vector<double> res_corr;
+  std::vector<Eigen::Isometry2d> res_T;
+
+  int num_best_cands = cand_mng.fineOptimize(top_n, res_cand_ptr, res_corr, res_T);
+  if (!res_T.empty()) {
+    printf("Pair prediction: Positive.\n");
+    T_init = res_T[0];  // actually the fine optimized
   }
 
 
@@ -210,25 +238,6 @@ int main(int argc, char **argv) {
       ".png";
   ContourManager::saveMatchedPairImg(f_name, *cmng_ptr_old, *cmng_ptr_new);
 
-//  // test 2. save slice accumulated from top N contours
-////  for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
-////
-////  }
-////  cmng_ptr_old->saveAccumulatedContours(10);
-////  cmng_ptr_new->saveAccumulatedContours(10);
-//
-//  // test 3. show distance description
-////  cmng_ptr_old->expShowDists(1, 1, 10);
-////  cmng_ptr_new->expShowDists(1, 2, 10);
-////
-////  cmng_ptr_old->expShowBearing(1, 1, 10);
-////  cmng_ptr_new->expShowBearing(1, 2, 10);
-//
-//  cmng_ptr_old->expShowDists(3, 3, 10);
-//  cmng_ptr_new->expShowDists(3, 3, 10);
-//
-//  cmng_ptr_old->expShowBearing(3, 3, 10);
-//  cmng_ptr_new->expShowBearing(3, 3, 10);
 
   // test 4. calculate GMM L2 optimization using ceres
   GMMOptConfig gmm_config;
@@ -239,15 +248,25 @@ int main(int argc, char **argv) {
 //  0.997106 0.0760232  -4.46818
 //  0         0         1
 
-  ConstellCorrelation corr_est(gmm_config);
+  if (T_init.matrix() == Eigen::Isometry2d::Identity().matrix()) {
+    printf("No valid T init produced from the matching.");
+    return 0;
+  }
 
   // optimize
-  corr_est.initProblem(*cmng_ptr_old, *cmng_ptr_new, T_init);
-  const auto corr_final = corr_est.calcCorrelation();
-  std::cout << "T init 2d: \n" << corr_final.second.matrix() << std::endl;
+//  // case 1: use another opt flow
+//  ConstellCorrelation corr_est(gmm_config);
+//  corr_est.initProblem(*cmng_ptr_old, *cmng_ptr_new, T_init);
+//  std::pair<double, Eigen::Isometry2d> corr_final = corr_est.calcCorrelation();
+//  std::cout << "Fine corr: " << corr_final.first << "\nT opt 2d: \n" << corr_final.second.matrix() << std::endl;
+
+  // case 2: use the ensemble output:
+  std::pair<double, Eigen::Isometry2d> corr_final;
+  corr_final.first = res_corr[0];
+  corr_final.second = res_T[0];
 
   // eval with gt:
-  const auto gt_poses = reader.getGtImuPoses();
+  const auto gt_poses = reader.getGNSSImuPoses();
   const auto T_imu_lidar = reader.get_T_imu_velod();
   Eigen::Isometry3d gt_pose_old, gt_pose_new;
   for (auto &itm: gt_poses) {
@@ -259,6 +278,9 @@ int main(int argc, char **argv) {
 
 //  std::cout << gt_pose_old.matrix() << std::endl;
 //  std::cout << gt_pose_new.matrix() << std::endl;
+
+  Eigen::Isometry2d T_est_sens_2d = ConstellCorrelation::getEstSensTF(corr_final.second, config);
+  std::cout << "T delta est 2d:\n" << T_est_sens_2d.matrix() << std::endl;
 
   Eigen::Isometry2d T_err_2d = ConstellCorrelation::evalMetricEst(corr_final.second, gt_pose_old, gt_pose_new, config);
   std::cout << "Error 2d:\n" << T_err_2d.matrix() << std::endl;

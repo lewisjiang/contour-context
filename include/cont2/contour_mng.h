@@ -107,7 +107,7 @@ const int16_t BITS_PER_LAYER = 64;
 const int8_t DIST_BIN_LAYERS[] = {1, 2, 3, 4};  // the layers for the dist key
 const int16_t NUM_BIN_KEY_LAYER = sizeof(DIST_BIN_LAYERS) / sizeof(int8_t);
 
-union ConstellationPair {  // given a pair of ContourManager, this records the seq of 2 matched contours at certain level
+union ConstellationPair {  // given a pair of ContourManager, this records the seq of 2 "matched" contours at a certain level
   struct {
     int8_t level;
     int8_t seq_src;
@@ -116,6 +116,16 @@ union ConstellationPair {  // given a pair of ContourManager, this records the s
   int data[1]{};
 
   ConstellationPair(int8_t l, int8_t s, int8_t t) : level(l), seq_src(s), seq_tgt(t) {}
+
+  bool operator<(const ConstellationPair &a) const {
+    return level < a.level || (level == a.level && seq_src < a.seq_src) ||
+           (level == a.level && seq_src == a.seq_src && seq_tgt < a.seq_tgt);
+  }
+
+  bool operator==(const ConstellationPair &a) const {
+    return level == a.level && seq_src == a.seq_src && seq_tgt == a.seq_tgt; // why not just compare data[0]?
+  }
+
 };
 
 //! binary constellation identity
@@ -158,7 +168,7 @@ struct BCI { //binary constellation identity
 
   explicit BCI(int8_t seq, int8_t lev) : dist_bin_(0), piv_seq_(seq), level_(lev) {}
 
-  // check the similarity of two BCI in terms of hidden constellation
+  // check the similarity of two BCI in terms of implicit constellation
   static int checkConstellSim(const BCI &src, const BCI &tgt, std::vector<ConstellationPair> &constell_res) {
     DCHECK_EQ(src.level_, tgt.level_);
     std::bitset<BITS_PER_LAYER * NUM_BIN_KEY_LAYER> res1, res2, res3;
@@ -940,7 +950,7 @@ public:
   static std::pair<Eigen::Isometry2d, bool> calcScanCorresp(const ContourManager &src, const ContourManager &tgt);
 
   // T_tgt = T_delta * T_src
-  ///
+  /// Check the similarity of each pair of stars(contours) in the constellation
   /// \param src
   /// \param tgt
   /// \param levels
@@ -948,116 +958,156 @@ public:
   /// \param ids_tgt
   /// \param sim_idx if return true, this contains the index of ids_{src|tgt} survived pairwise similarity check. Values
   ///     taken from [0, ids_tgt.size()).
-  /// \return the transform and the number of matched...
-  static std::pair<Eigen::Isometry2d, int>  // int: human readability
-  calcScanCorresp(const ContourManager &src, const ContourManager &tgt, const std::vector<ConstellationPair> &cstl,
-                  std::vector<int> &sim_idx, const int min_pair) {
+  /// \return the number of matched...
+  static int  // int: human readability
+  checkConstellCorrespSim(const ContourManager &src, const ContourManager &tgt,
+                          const std::vector<ConstellationPair> &cstl_in,
+                          std::vector<ConstellationPair> &cstl_out, const int &min_pair) {
     // cross level consensus (CLC)
     // The rough constellation should have been established.
     DCHECK_EQ(src.cont_views_.size(), tgt.cont_views_.size());
 
-    std::pair<Eigen::Isometry2d, int> ret{};
+    int matched_cnt{};
     std::map<int, std::pair<float, float>> lev_frac;  // {lev:[src, tgt], }
 
-    sim_idx.clear();
+    cstl_out.clear();
     int num_sim = 0;
     // 1. check individual sim
     printf("check individual sim of the constellation:\n");
-    for (int i = 0; i < cstl.size(); i++) {
-//      if (ContourView::checkSim(*src.cont_views_[cstl[i].level][cstl[i].seq_src],
-//                                *tgt.cont_views_[cstl[i].level][cstl[i].seq_tgt]))
+    for (auto i: cstl_in) {
+//      if (ContourView::checkSim(*src.cont_views_[cstl_in[i].level][cstl_in[i].seq_src],
+//                                *tgt.cont_views_[cstl_in[i].level][cstl_in[i].seq_tgt]))
       bool curr_success = false;
-      if (checkContPairSim(src, tgt, cstl[i])) {
-        sim_idx.push_back(i);
-        auto &it = lev_frac[cstl[i].level];
-        it.first += src.cont_perc_[cstl[i].level][cstl[i].seq_src];
-        it.second += tgt.cont_perc_[cstl[i].level][cstl[i].seq_tgt];
+      if (checkContPairSim(src, tgt, i)) {
+        cstl_out.push_back(i);
+        auto &it = lev_frac[i.level];
+        it.first += src.cont_perc_[i.level][i.seq_src];
+        it.second += tgt.cont_perc_[i.level][i.seq_tgt];
         curr_success = true;
       }
 
-      printf("%d@lev %d, %d-%d\n", int(curr_success), cstl[i].level, cstl[i].seq_src, cstl[i].seq_tgt);
+      printf("%d@lev %d, %d-%d\n", int(curr_success), i.level, i.seq_src, i.seq_tgt);
     }
 
     for (const auto &rec: lev_frac) {
       printf("matched percent lev: %d, %.3f/%.3f\n", rec.first, rec.second.first, rec.second.second);
     }
 
-    ret.second = sim_idx.size();
-    if (sim_idx.size() < min_pair)
-      return ret;  // TODO: use cross level consensus to find more possible matched pairs
+    matched_cnt = cstl_out.size();
+    if (cstl_out.size() < min_pair)
+      return matched_cnt;  // TODO: use cross level consensus to find more possible matched pairs
 
     // 2. check orientation
     // 2.1 get major axis direction
     V2F shaft_src(0, 0), shaft_tgt(0, 0);
-    for (int i = 1; i < std::min((int) sim_idx.size(), 10); i++) {
+    for (int i = 1; i < std::min((int) cstl_out.size(), 10); i++) {
       for (int j = 0; j < i; j++) {
-        V2F curr_shaft = src.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_src]->pos_mean_ -
-                         src.cont_views_[cstl[sim_idx[j]].level][cstl[sim_idx[j]].seq_src]->pos_mean_;
+        V2F curr_shaft = src.cont_views_[cstl_out[i].level][cstl_out[i].seq_src]->pos_mean_ -
+                         src.cont_views_[cstl_out[j].level][cstl_out[j].seq_src]->pos_mean_;
         if (curr_shaft.norm() > shaft_src.norm()) {
           shaft_src = curr_shaft.normalized();
-          shaft_tgt = (tgt.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_tgt]->pos_mean_ -
-                       tgt.cont_views_[cstl[sim_idx[j]].level][cstl[sim_idx[j]].seq_tgt]->pos_mean_).normalized();
+          shaft_tgt = (tgt.cont_views_[cstl_out[i].level][cstl_out[i].seq_tgt]->pos_mean_ -
+                       tgt.cont_views_[cstl_out[j].level][cstl_out[j].seq_tgt]->pos_mean_).normalized();
         }
       }
     }
-    // 2.2 if both src and tgt contour are orientational salient but the orientations largely differ, remove the pair
-    num_sim = sim_idx.size();
+    // 2.2 if both src and tgt contour are orientationally salient but the orientations largely differ, remove the pair
+    num_sim = cstl_out.size();
     for (int i = 0; i < num_sim;) {
-      const auto &sc1 = src.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_src],
-          &tc1 = tgt.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_tgt];
+      const auto &sc1 = src.cont_views_[cstl_out[i].level][cstl_out[i].seq_src],
+          &tc1 = tgt.cont_views_[cstl_out[i].level][cstl_out[i].seq_tgt];
       if (sc1->ecc_feat_ && tc1->ecc_feat_) {
         float theta_s = std::acos(shaft_src.transpose() * sc1->eig_vecs_.col(1));   // acos: [0,pi)
         float theta_t = std::acos(shaft_tgt.transpose() * tc1->eig_vecs_.col(1));
         if (diff_delt<float>(theta_s, theta_t, M_PI / 6) && diff_delt<float>(M_PI - theta_s, theta_t, M_PI / 6)) {
-          std::swap(sim_idx[i], sim_idx[num_sim - 1]);
+          std::swap(cstl_out[i], cstl_out[num_sim - 1]);
           num_sim--;
           continue;
         }
       }
       i++;
     }
-    sim_idx.resize(num_sim);
-    ret.second = sim_idx.size();
-    if (sim_idx.size() < min_pair)
-      return ret;  // TODO: use cross level consensus to find more possible matched pairs
+    cstl_out.erase(cstl_out.begin() + num_sim, cstl_out.end()); // sure to reduce size, without default constructor
+    matched_cnt = cstl_out.size();
+    if (cstl_out.size() < min_pair)
+      return matched_cnt;  // TODO: use cross level consensus to find more possible matched pairs
 
-    std::sort(sim_idx.begin(), sim_idx.end());  // human readability
-
-    // 3. estimate transform using the data from current level
-    Eigen::Matrix<double, 2, Eigen::Dynamic> pointset1; // src
-    Eigen::Matrix<double, 2, Eigen::Dynamic> pointset2; // tgt
-    pointset1.resize(2, sim_idx.size());
-    pointset2.resize(2, sim_idx.size());
-    for (int i = 0; i < sim_idx.size(); i++) {
-      pointset1.col(i) = src.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_src]->pos_mean_.cast<double>();
-      pointset2.col(i) = tgt.cont_views_[cstl[sim_idx[i]].level][cstl[sim_idx[i]].seq_tgt]->pos_mean_.cast<double>();
-    }
-
-    Eigen::Matrix3d T_delta = Eigen::umeyama(pointset1, pointset2, false);
+    std::sort(cstl_out.begin(), cstl_out.end());  // human readability
 
     printf("Found matched pairs:\n");
-    for (int i: sim_idx) {
-      printf("\tlev %d, src:tgt  %d: %d\n", cstl[i].level, cstl[i].seq_src, cstl[i].seq_tgt);
+    for (const auto &i: cstl_out) {
+      printf("\tlev %d, src:tgt  %d: %d\n", i.level, i.seq_src, i.seq_tgt);
     }
-    std::cout << "Transform matrix:\n" << T_delta << std::endl;
 
     // get the percentage of points used in match v. total area of each level.
     std::vector<float> level_perc_used_src(src.cfg_.lv_grads_.size(), 0);
     std::vector<float> level_perc_used_tgt(tgt.cfg_.lv_grads_.size(), 0);
-    for (int i: sim_idx) {
-      level_perc_used_src[cstl[i].level] += src.cont_perc_[cstl[i].level][cstl[i].seq_src];
-      level_perc_used_tgt[cstl[i].level] += tgt.cont_perc_[cstl[i].level][cstl[i].seq_tgt];
+    for (const auto &i: cstl_out) {
+      level_perc_used_src[i.level] += src.cont_perc_[i.level][i.seq_src];
+      level_perc_used_tgt[i.level] += tgt.cont_perc_[i.level][i.seq_tgt];
     }
     printf("Percentage used in constellation:\n");
     for (int i = 0; i < src.cfg_.lv_grads_.size(); i++) {
       printf("lev: %d, src: %4.2f, tgt: %4.2f\n", i, level_perc_used_src[i], level_perc_used_tgt[i]);
     }
 
-//    ret.second = true;
-    ret.second = sim_idx.size();
-    ret.first.setIdentity();
-    ret.first.rotate(std::atan2(T_delta(1, 0), T_delta(0, 0)));
-    ret.first.pretranslate(T_delta.block<2, 1>(0, 2));
+    return matched_cnt;
+
+//    // 3. estimate transform using the data from current level
+//    Eigen::Matrix<double, 2, Eigen::Dynamic> pointset1; // src
+//    Eigen::Matrix<double, 2, Eigen::Dynamic> pointset2; // tgt
+//    pointset1.resize(2, cstl_out.size());
+//    pointset2.resize(2, cstl_out.size());
+//    for (int i = 0; i < cstl_out.size(); i++) {
+//      pointset1.col(
+//          i) = src.cont_views_[cstl_out[i].level][cstl_out[i].seq_src]->pos_mean_.cast<double>();
+//      pointset2.col(
+//          i) = tgt.cont_views_[cstl_out[i].level][cstl_out[i].seq_tgt]->pos_mean_.cast<double>();
+//    }
+//
+//    Eigen::Matrix3d T_delta = Eigen::umeyama(pointset1, pointset2, false);
+//    std::cout << "Transform matrix:\n" << T_delta << std::endl;
+//
+//
+////    ret.second = true;
+//    ret.second = cstl_out.size();
+//    ret.first.setIdentity();
+//    ret.first.rotate(std::atan2(T_delta(1, 0), T_delta(0, 0)));
+//    ret.first.pretranslate(T_delta.block<2, 1>(0, 2));
+//    return ret;
+  }
+
+  /// Calculate a transform from a list of manually/externally matched contour indices (constellation)
+  /// \tparam Iter The iterator of the container class (vector, set, etc.) that holds constellation pairs
+  /// \param src
+  /// \param tgt
+  /// \param cstl_beg
+  /// \param cstl_end
+  /// \return
+  template<typename Iter>
+  static Eigen::Isometry2d getTFFromConstell(const ContourManager &src, const ContourManager &tgt,
+                                             Iter cstl_beg, Iter cstl_end) {  // no const, just don't modify in the code
+    int num_elem = cstl_end - cstl_beg;
+    CHECK_GT(num_elem, 3);
+    Eigen::Matrix<double, 2, Eigen::Dynamic> pointset1; // src
+    Eigen::Matrix<double, 2, Eigen::Dynamic> pointset2; // tgt
+    pointset1.resize(2, num_elem);
+    pointset2.resize(2, num_elem);
+    for (int i = 0; i < num_elem; i++) {
+      pointset1.col(i) = src.cont_views_[(cstl_beg + i)->level][(cstl_beg +
+                                                                 i)->seq_src]->pos_mean_.template cast<double>();
+      pointset2.col(i) = tgt.cont_views_[(cstl_beg + i)->level][(cstl_beg +
+                                                                 i)->seq_tgt]->pos_mean_.template cast<double>();
+    }
+
+    Eigen::Matrix3d T_delta = Eigen::umeyama(pointset1, pointset2, false);
+    std::cout << "Transform matrix:\n" << T_delta << std::endl;
+
+    Eigen::Isometry2d ret;
+    ret.setIdentity();
+    ret.rotate(std::atan2(T_delta(1, 0), T_delta(0, 0)));
+    ret.pretranslate(T_delta.block<2, 1>(0, 2));
+
     return ret;
   }
 
