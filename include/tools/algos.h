@@ -64,4 +64,48 @@ inline std::pair<int, T> search_vec(const std::vector<std::pair<int, T>> &arr, i
   return search_vec<T>(arr, p1, mid - 1, tgt);
 }
 
+/// Align var[i] to at least the lower bound bar[i]
+/// \tparam T
+/// \tparam N
+/// \param bar
+/// \param var
+template<typename T, int N>
+void alignLB(const T bar[N], T var[N]) {
+  for (int i = 0; i < N; i++)
+    var[i] = var[i] < bar[i] ? bar[i] : var[i];
+}
+
+template<typename T>
+void alignLB(const T &bar, T &var) {  // stricter type constraint
+  for (int i = 0; i < T::SizeAtCompileTime; i++)
+    var.data[i] = var.data[i] < bar.data[i] ? bar.data[i] : var.data[i];
+}
+
+///// Align var[i] to at least the lower bound `bar`
+//template<typename T, int N>
+//void alignLB(const T &bar, T var[N]) {
+//  for (int i = 0; i < N; i++)
+//    var[i] = var[i] < bar ? bar : var[i];
+//}
+
+/// Align var[i] to at most the upper bound bar[i]
+template<typename T, int N>
+void alignUB(const T bar[N], T var[N]) {
+  for (int i = 0; i < N; i++)
+    var[i] = var[i] > bar[i] ? bar[i] : var[i];
+}
+
+template<typename T>
+void alignUB(const T &bar, T &var) {
+  for (int i = 0; i < T::SizeAtCompileTime; i++)
+    var.data[i] = var.data[i] > bar.data[i] ? bar.data[i] : var.data[i];
+}
+
+///// Align var[i] to at most the upper bound `bar`
+//template<typename T, int N>
+//void alignUB(const T &bar, T var[N]) {
+//  for (int i = 0; i < N; i++)
+//    var[i] = var[i] > bar ? bar : var[i];
+//}
+
 #endif //CONT2_ALGOS_H

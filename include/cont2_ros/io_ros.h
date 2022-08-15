@@ -44,7 +44,7 @@ class Cont2_ROS_IO {
   tf2_ros::Buffer tfBuffer;
   tf2_ros::TransformListener tfListener;
 
-  uint16_t start_ns;  // ignore timestamps smaller than this one. Useful to precisely control the messages we want.
+  uint64_t start_ns;  // ignore timestamps smaller than this one. Useful to precisely control the messages we want.
 
 
 protected:

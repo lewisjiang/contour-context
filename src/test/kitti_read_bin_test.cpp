@@ -162,8 +162,33 @@ int main(int argc, char **argv) {
   Eigen::Isometry2d T_init;
   T_init.setIdentity();
 
-  CandSimScore score_lb(10, 5, 0.65);
-  CandidateManager cand_mng(cmng_ptr_new, score_lb);
+  // init similarity thres params
+  CandidateScoreEnsemble thres_lb, thres_ub;
+  // a.1 constellation similarity
+  thres_lb.sim_constell.i_ovlp_sum = 5;
+  thres_ub.sim_constell.i_ovlp_sum = 10;
+
+  thres_lb.sim_constell.i_ovlp_max_one = 4;
+  thres_ub.sim_constell.i_ovlp_max_one = 6;
+
+  thres_lb.sim_constell.i_in_ang_rng = 4;
+  thres_ub.sim_constell.i_in_ang_rng = 6;
+
+  // a.2 pairwise similarity
+  thres_lb.sim_pair.i_indiv_sim = 4;
+  thres_ub.sim_pair.i_indiv_sim = 6;
+
+  thres_lb.sim_pair.i_orie_sim = 4;
+  thres_ub.sim_pair.i_orie_sim = 6;
+
+  thres_lb.sim_pair.f_area_perc = 5; // 0.05;
+  thres_ub.sim_pair.f_area_perc = 15; // 0.15;
+
+  // a.3 correlation
+  thres_lb.correlation = 0.65;
+  thres_ub.correlation = 0.75;
+
+  CandidateManager cand_mng(cmng_ptr_new, thres_lb, thres_ub);
 
   printf("Keys:\n"); // as if adding retrieved keys (search results) in `queryRangedKNN()`.
   for (int ll = 0; ll < config.lv_grads_.size(); ll++) {
@@ -189,10 +214,13 @@ int main(int argc, char **argv) {
         // check sim step by step:
 
         ConstellationPair piv_pair(ll, i1, i2);
-        std::array<int, 4> cnt_pass = cand_mng.checkCandWithHint(cmng_ptr_old, piv_pair);
-        printf("key check res: %d, ", int(cnt_pass[3]));
+        CandidateScoreEnsemble ret_score = cand_mng.checkCandWithHint(cmng_ptr_old, piv_pair);
 
-        printf("Each check: %d, %2d, %2d, %d\n", cnt_pass[0], cnt_pass[1], cnt_pass[2], cnt_pass[3]);
+        printf("Each check: ");
+        ret_score.sim_constell.print();
+        ret_score.sim_pair.print();
+        printf("\n");
+//        printf("%6f\n", ret_score.correlation);  // of course 0, since we have not calc correlation yet.
 
       }
     }
@@ -221,12 +249,12 @@ int main(int argc, char **argv) {
 
   cand_mng.tidyUpCandidates();
 
-  const int top_n = 5;
+  const int max_fine_opt = 5;
   std::vector<std::shared_ptr<const ContourManager>> res_cand_ptr;
   std::vector<double> res_corr;
   std::vector<Eigen::Isometry2d> res_T;
 
-  int num_best_cands = cand_mng.fineOptimize(top_n, res_cand_ptr, res_corr, res_T);
+  int num_best_cands = cand_mng.fineOptimize(max_fine_opt, res_cand_ptr, res_corr, res_T);
   if (!res_T.empty()) {
     printf("Pair prediction: Positive.\n");
     T_init = res_T[0];  // actually the fine optimized
@@ -266,10 +294,10 @@ int main(int argc, char **argv) {
   corr_final.second = res_T[0];
 
   // eval with gt:
-  const auto gt_poses = reader.getGNSSImuPoses();
-  const auto T_imu_lidar = reader.get_T_imu_velod();
+  const auto &gt_poses = reader.getGNSSImuPoses();
+  const auto &T_imu_lidar = reader.get_T_imu_velod();
   Eigen::Isometry3d gt_pose_old, gt_pose_new;
-  for (auto &itm: gt_poses) {
+  for (const auto &itm: gt_poses) {
     if (itm.first == idx_old)
       gt_pose_old = itm.second * T_imu_lidar;
     else if (itm.first == idx_new)

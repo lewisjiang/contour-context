@@ -272,7 +272,35 @@ public:
     std::vector<double> cand_corr;
     std::vector<Eigen::Isometry2d> bev_tfs;
     clk.tic();
-    contour_db.queryRangedKNN(cmng_ptr, candidate_loop, cand_corr, bev_tfs);
+
+    // init similarity thres params
+    CandidateScoreEnsemble thres_lb, thres_ub;
+    // a.1 constellation similarity
+    thres_lb.sim_constell.i_ovlp_sum = 5;
+    thres_ub.sim_constell.i_ovlp_sum = 10;
+
+    thres_lb.sim_constell.i_ovlp_max_one = 4;
+    thres_ub.sim_constell.i_ovlp_max_one = 6;
+
+    thres_lb.sim_constell.i_in_ang_rng = 4;
+    thres_ub.sim_constell.i_in_ang_rng = 6;
+
+    // a.2 pairwise similarity
+    thres_lb.sim_pair.i_indiv_sim = 4;
+    thres_ub.sim_pair.i_indiv_sim = 6;
+
+    thres_lb.sim_pair.i_orie_sim = 4;
+    thres_ub.sim_pair.i_orie_sim = 6;
+
+    thres_lb.sim_pair.f_area_perc = 5; // 0.05;
+    thres_ub.sim_pair.f_area_perc = 10; // 0.15;
+
+    // a.3 correlation
+    thres_lb.correlation = 0.65;
+    thres_ub.correlation = 0.75;
+
+//    contour_db.queryRangedKNN(cmng_ptr, candidate_loop, cand_corr, bev_tfs);
+    contour_db.queryRangedKNN(cmng_ptr, thres_lb, thres_ub, candidate_loop, cand_corr, bev_tfs);
     printf("%lu Candidates in %7.5fs: \n", candidate_loop.size(), clk.toc());
 
     bool has_tp_lc = false;

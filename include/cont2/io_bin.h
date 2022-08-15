@@ -72,7 +72,7 @@ public:
     T_imu_velod_.rotate(calib_rot_q);
     T_imu_velod_.pretranslate(calib_trans);
 
-    // Read gt imu poses
+    // Read GNSS-imu poses. Not gt
     double scale = 0;
     Eigen::Vector3d trans_orig(0, 0, 0);
     for (int idx = 0; idx < max_index_num; idx++) {
@@ -120,7 +120,7 @@ public:
   };
 
   // get all gt pose (to display)
-  std::vector<std::pair<int, Eigen::Isometry3d>> getGtImuPoses() const {
+  const std::vector<std::pair<int, Eigen::Isometry3d>> &getGNSSImuPoses() const {
     return imu_gt_poses_;
   }
 
@@ -170,6 +170,7 @@ public:
 
     } else {
       printf("Lidar bin file %s does not exist.\n", lidar_bin_path.c_str());
+      exit(-1);
     }
     return out_ptr;
   }

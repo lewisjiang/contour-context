@@ -95,6 +95,8 @@ def plot_contours(raw_data=None, levels=None, legends=()):
         print("No levels selected")
         return
 
+    print(data_names)
+
     levels.sort()
     level_map = dict()
     for i, l in enumerate(levels):
@@ -105,10 +107,10 @@ def plot_contours(raw_data=None, levels=None, legends=()):
     used_colors = []
 
     max_xy = [0, 0]
-    tf_ed = True  # if we use a transform T_delta (T_tgt = T_delta * T_src) to have a clearer view
+    tf_ed = True  # whether we use a transform T_delta (T_tgt = T_delta * T_src) to have a clearer view in tgt frame
     T_delta_str = """
- 0.945709  0.325015  -22.2714
--0.325015  0.945709   27.9173
+ 0.707919  0.706293  -34.1896
+-0.706293  0.707919   72.3844
         0         0         1
     """
     T_delta_elem = [eval(i) for i in T_delta_str.split()]
@@ -238,8 +240,11 @@ if __name__ == "__main__":
     # seq_old = 905
     # seq_new = 2636
 
-    seq_old = 890
-    seq_new = 2632
+    # seq_old = 890  # final bus fn
+    # seq_new = 2632
+
+    seq_old = 806  # seek farther
+    seq_new = 1562
 
     f_old = "../results/contours_orig-000000%04d.txt" % seq_old
     f_new = "../results/contours_orig-000000%04d.txt" % seq_new

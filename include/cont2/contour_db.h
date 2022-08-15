@@ -60,8 +60,8 @@ struct IndexOfKey {  // where does the key come from? 1) global idx, 2) level, 3
   IndexOfKey(size_t g, int l, int s) : gidx(g), level(l), seq(s) {}
 };
 
+//! The minimal unit of a tree/wrapper of a kd-tree
 struct TreeBucket {
-
 
   struct RetrTriplet {  // retrieval triplet
     RetrievalKey pt;
@@ -143,51 +143,11 @@ struct TreeBucket {
   /// \param ret_idx
   /// \param out_dist_sq The size must be num_res
   /// \param q_key
-  void
-  knnSearch(const int num_res, std::vector<IndexOfKey> &ret_idx, std::vector<KeyFloatType> &out_dist_sq,
-            RetrievalKey q_key, const KeyFloatType max_dist_sq) const {
-    ret_idx.clear();
-    out_dist_sq.resize(num_res);
-    std::fill(out_dist_sq.begin(), out_dist_sq.end(), MAX_DIST_SQ);   // in case of fewer points in the tree than k
-
-    if (!tree_ptr) { return; }
-
-    ret_idx.reserve(num_res);
-
-    std::vector<size_t> idx(num_res, 0);
-
-//    nanoflann::KNNResultSet<KeyFloatType> resultSet(num_res);  // official knn search
-//    resultSet.init(&idx[0], &out_dist_sq[0]);
-
-    MyKNNResSet<KeyFloatType> resultSet(num_res);   // knn with max dist
-    resultSet.init(&idx[0], &out_dist_sq[0], max_dist_sq);
-
-    tree_ptr->index->findNeighbors(resultSet, q_key.data(), nanoflann::SearchParams(10));
-    for (size_t i = 0; i < num_res; i++) {
-      ret_idx.emplace_back(gkidx_tree_[idx[i]]);
-    }
-  }
+  void knnSearch(const int num_res, std::vector<IndexOfKey> &ret_idx, std::vector<KeyFloatType> &out_dist_sq,
+                 RetrievalKey q_key, const KeyFloatType max_dist_sq) const;
 
   void rangeSearch(KeyFloatType worst_dist_sq, std::vector<IndexOfKey> &ret_idx, std::vector<KeyFloatType> &out_dist_sq,
-                   RetrievalKey q_key) const {
-    std::vector<std::pair<size_t, KeyFloatType>> ret_matches;
-    nanoflann::SearchParams params;
-    // params.sorted = false;
-
-    ret_idx.clear();
-    out_dist_sq.clear();
-    if (!tree_ptr) { return; }
-
-    const size_t nMatches = tree_ptr->index->radiusSearch(q_key.data(), worst_dist_sq, ret_matches, params);
-
-    ret_idx.reserve(nMatches);
-    out_dist_sq.reserve(nMatches);
-
-    for (size_t i = 0; i < ret_matches.size(); i++) {
-      ret_idx.emplace_back(gkidx_tree_[ret_matches[i].first]);
-      out_dist_sq.emplace_back(ret_matches[i].second);
-    }
-  }
+                   RetrievalKey q_key) const;
 
 };
 
@@ -228,324 +188,11 @@ struct LayerDB {
   // TO-DO: rebalance and add buffer to the tree
   // Assumption: rebuild in turn instead of rebuild all at once. tr1 and tr2 are adjacent, tr1 has a lower bucket range.
 //  void rebuild(int seed, double curr_ts) {
-  void rebuild(int idx_t1, double curr_ts) {
-//    int idx_t1 = std::abs(seed) % (2 * (max_num_backets_ - 2));
-//    if (idx_t1 > (max_num_backets_ - 2))
-//      idx_t1 = 2 * (max_num_backets_ - 2) - idx_t1;
-
-    DCHECK_LT(idx_t1, buckets_.size() - 1);
-    TreeBucket &tr1 = buckets_[idx_t1], &tr2 = buckets_[idx_t1 + 1];
-
-    DCHECK_EQ(tr1.buc_end_, tr2.buc_beg_);
-    bool pb1 = tr1.needPopBuffer(curr_ts), pb2 = tr2.needPopBuffer(curr_ts); // if we need to pop buffer
-    if (!pb1 && !pb2)
-      return;  // rebuild is scheduled at the time when we pop the buffer
-
-    int sz1 = tr1.getTreeSize(), sz2 = tr2.getTreeSize();
-    double diff_ratio = 1.0 * std::abs(sz1 - sz2) / std::max(sz1, sz2);
-    if (pb1 && !pb2 && (diff_ratio < imba_diff_ratio_ || std::max(sz1, sz2) < min_elem_split_)) {
-      tr1.popBufferMax(curr_ts);
-      return;
-    }
-
-    if (!pb1 && pb2 && (diff_ratio < imba_diff_ratio_ || std::max(sz1, sz2) < min_elem_split_)) {
-      tr2.popBufferMax(curr_ts);
-      return;
-    }
-    // else, balance two trees
-    // 1. find new boundary/pivot.
-    // q: How to find the elements to move in O(n)
-    //  a1: flatten and rebuild?
-    //  a2: sort the larger one, and copy parts to the smaller one.
-
-    if (diff_ratio < 0.5 * imba_diff_ratio_) {
-      if (pb1) tr1.popBufferMax(curr_ts);
-      if (pb2) tr2.popBufferMax(curr_ts);
-      return;
-    }
-
-    printf(" (m->)"); // merging here
-    if (sz1 > sz2) {
-//      DCHECK_GE(sz1, min_elem_split_);
-      int to_move_max = int((sz1 - sz2 + imba_diff_ratio_ * sz2) / (2 - imba_diff_ratio_));
-      int to_move_mid = int((sz1 - sz2) / 2.0);
-      int to_move_min = std::max(0, int((sz1 - sz2 - imba_diff_ratio_ * sz1) / (2 - imba_diff_ratio_)));
-      DCHECK_GE(to_move_max, to_move_mid);
-      DCHECK_GE(to_move_mid, to_move_min);
-
-      std::vector<int> sort_permu(sz1);
-      std::iota(sort_permu.begin(), sort_permu.end(), 0);
-      std::sort(sort_permu.begin(), sort_permu.end(), [&](const int &a, const int &b) {
-        return tr1.data_tree_[a](bucket_chann_) < tr1.data_tree_[b](bucket_chann_);
-      }); // not actually moving data positions
-
-      int num_to_move = 0;
-      KeyFloatType split_val = tr1.buc_end_; // tree1: ( , split val], tree2: [split val, )
-      if (tr1.data_tree_[sort_permu[sz1 - to_move_mid]](bucket_chann_) !=
-          tr1.data_tree_[sort_permu[sz1 - to_move_mid - 1]](bucket_chann_)) { // if no contagious value across split
-        num_to_move = to_move_mid;
-        split_val = tr1.data_tree_[sort_permu[sz1 - to_move_mid]](bucket_chann_);
-      } else {
-        KeyFloatType contagious_val = tr1.data_tree_[sort_permu[sz1 - to_move_mid]](bucket_chann_);
-        int i = to_move_mid - 1;
-        for (; i > to_move_min; i--) {  // look into larger size
-          if (tr1.data_tree_[sort_permu[sz1 - i]](bucket_chann_) != contagious_val) {  // found the split position
-            num_to_move = i;
-            split_val = tr1.data_tree_[sort_permu[sz1 - i]](bucket_chann_);
-            break;
-          }
-        }
-        if (num_to_move == 0) {
-          i = to_move_mid + 1;
-          for (; i < to_move_max; i++) {  // look into smaller side
-            if (tr1.data_tree_[sort_permu[sz1 - i]](bucket_chann_) != contagious_val) {  // found the split position
-              num_to_move = i - 1;
-              split_val = contagious_val;
-              break;
-            }
-          }
-        }
-      }
-
-      if (num_to_move == 0) { // should rebalance but cannot, due to a strip of contagious bucket values
-        printf("Cannot split due to contagious values A");
-        tr1.popBufferMax(curr_ts);
-        if (pb2) tr2.popBufferMax(curr_ts);
-        return;
-      }
-
-      for (int i = 0; i < num_to_move; i++) {  // add to shorter tree
-        tr2.data_tree_.emplace_back(tr1.data_tree_[sort_permu[sz1 - i - 1]]);
-        tr2.gkidx_tree_.emplace_back(tr1.gkidx_tree_[sort_permu[sz1 - i - 1]]);
-      }
-
-      int p_dat = sz1 - 1, p_perm = sz1 - 1;
-      for (; p_perm >= sz1 - num_to_move; p_perm--) {  // rotate to the back;
-        while (tr1.data_tree_[p_dat](bucket_chann_) >= split_val)
-          p_dat--;
-        if (sort_permu[p_perm] < p_dat) {
-          std::swap(tr1.data_tree_[p_dat], tr1.data_tree_[sort_permu[p_perm]]);
-          std::swap(tr1.gkidx_tree_[p_dat], tr1.gkidx_tree_[sort_permu[p_perm]]);
-          p_dat--;
-        }
-      }
-      DCHECK_EQ(p_dat + num_to_move, sz1 - 1);
-      tr1.data_tree_.resize(p_dat + 1);
-      tr1.gkidx_tree_.resize(p_dat + 1, tr1.gkidx_tree_[0]);
-
-      // move buffer: merge and redistribute
-      int p1 = 0, p2 = tr1.buffer_.size() - 1, sz_rem;
-      while (p1 <= p2) {
-        if (tr1.buffer_[p1].pt(bucket_chann_) >= split_val && tr1.buffer_[p2].pt(bucket_chann_) < split_val) {
-          std::swap(tr1.buffer_[p1], tr1.buffer_[p2]);
-          p1++;
-          p2--;
-        } else {
-          if (tr1.buffer_[p2].pt(bucket_chann_) >= split_val)
-            p2--;
-          if (tr1.buffer_[p1].pt(bucket_chann_) < split_val)
-            p1++;
-        }
-      }
-      sz_rem = p2 + 1;
-      tr2.buffer_.insert(tr2.buffer_.end(), tr1.buffer_.begin() + sz_rem, tr1.buffer_.end());
-      DCHECK_LE(sz_rem, tr1.buffer_.size());
-      tr1.buffer_.resize(sz_rem, tr1.buffer_[0]);  // ugly
-      tr1.buc_end_ = tr2.buc_beg_ = split_val;
-      bucket_ranges_[idx_t1 + 1] = split_val;
-
-
-    } else { // if tree 1 is shorter and move elements from tree 2 to tree 1:
-//      DCHECK_GE(sz2, min_elem_split_);
-      int to_move_max = int((sz2 - sz1 + imba_diff_ratio_ * sz1) / (2 - imba_diff_ratio_));
-      int to_move_mid = int((sz2 - sz1) / 2.0);
-      int to_move_min = std::max(0, int((sz2 - sz1 - imba_diff_ratio_ * sz2) / (2 - imba_diff_ratio_)));
-      DCHECK_GE(to_move_max, to_move_mid);
-      DCHECK_GE(to_move_mid, to_move_min);
-
-      std::vector<int> sort_permu(sz2);
-      std::iota(sort_permu.begin(), sort_permu.end(), 0);
-      std::sort(sort_permu.begin(), sort_permu.end(), [&](const int &a, const int &b) {
-        return tr2.data_tree_[a](bucket_chann_) > tr2.data_tree_[b](bucket_chann_);
-      }); // smaller at the back
-
-      int num_to_move = 0;
-      KeyFloatType split_val = tr1.buc_end_; // tree1: ( , split val], tree2: [split val, )
-      if (tr2.data_tree_[sort_permu[sz2 - to_move_mid]](bucket_chann_) !=
-          tr2.data_tree_[sort_permu[sz2 - to_move_mid - 1]](bucket_chann_)) { // if no contagious value across split
-        num_to_move = to_move_mid;
-        split_val = tr2.data_tree_[sort_permu[sz2 - to_move_mid - 1]](bucket_chann_);
-      } else {
-        KeyFloatType contagious_val = tr2.data_tree_[sort_permu[sz2 - to_move_mid]](bucket_chann_);
-        int i = to_move_mid - 1;
-        for (; i > to_move_min; i--) {  // look into smaller size
-          if (tr2.data_tree_[sort_permu[sz2 - i]](bucket_chann_) != contagious_val) {  // found the split position
-            num_to_move = i;
-            split_val = contagious_val;
-            break;
-          }
-        }
-        if (num_to_move == 0) {
-          i = to_move_mid + 1;
-          for (; i < to_move_max; i++) {  // look into larger buc side
-            if (tr2.data_tree_[sort_permu[sz2 - i]](bucket_chann_) != contagious_val) {  // found the split position
-              num_to_move = i - 1;
-              split_val = tr2.data_tree_[sort_permu[sz2 - i]](bucket_chann_);
-              break;
-            }
-          }
-        }
-      }
-
-      if (num_to_move == 0) { // should rebalance but cannot, due to a strip of contagious bucket values
-        printf("Cannot split due to contagious values B");
-        if (pb1) tr1.popBufferMax(curr_ts);
-        tr2.popBufferMax(curr_ts);
-        return;
-      }
-
-      for (int i = 0; i < num_to_move; i++) {  // add to shorter tree
-        tr1.data_tree_.emplace_back(tr2.data_tree_[sort_permu[sz2 - i - 1]]);
-        tr1.gkidx_tree_.emplace_back(tr2.gkidx_tree_[sort_permu[sz2 - i - 1]]);
-      }
-
-      int p_dat = sz2 - 1, p_perm = sz2 - 1;
-      for (; p_perm >= sz2 - num_to_move; p_perm--) {  // rotate to the back;
-        while (tr2.data_tree_[p_dat](bucket_chann_) < split_val)
-          p_dat--;
-        if (sort_permu[p_perm] < p_dat) {
-          std::swap(tr2.data_tree_[p_dat], tr2.data_tree_[sort_permu[p_perm]]);
-          std::swap(tr2.gkidx_tree_[p_dat], tr2.gkidx_tree_[sort_permu[p_perm]]);
-          p_dat--;
-        }
-      }
-      DCHECK_EQ(p_dat + num_to_move, sz2 - 1);
-      tr2.data_tree_.resize(p_dat + 1);
-      tr2.gkidx_tree_.resize(p_dat + 1, tr2.gkidx_tree_[0]);
-
-      // move buffer: merge and redistribute
-      int p1 = 0, p2 = tr2.buffer_.size() - 1, sz_rem;
-      while (p1 <= p2) {
-        if (tr2.buffer_[p1].pt(bucket_chann_) < split_val && tr2.buffer_[p2].pt(bucket_chann_) >= split_val) {
-          std::swap(tr2.buffer_[p1], tr2.buffer_[p2]);
-          p1++;
-          p2--;
-        } else {
-          if (tr2.buffer_[p2].pt(bucket_chann_) < split_val)
-            p2--;
-          if (tr2.buffer_[p1].pt(bucket_chann_) >= split_val)
-            p1++;
-        }
-      }
-      sz_rem = p2 + 1;
-      tr1.buffer_.insert(tr1.buffer_.end(), tr2.buffer_.begin() + sz_rem, tr2.buffer_.end());
-      DCHECK_LE(sz_rem, tr2.buffer_.size());
-      tr2.buffer_.resize(sz_rem, tr2.buffer_[0]);
-      tr1.buc_end_ = tr2.buc_beg_ = split_val;
-      bucket_ranges_[idx_t1 + 1] = split_val;
-
-    }
-
-    for (const auto &dat: tr1.data_tree_) {
-      DCHECK_LT(dat(bucket_chann_), tr1.buc_end_);
-      DCHECK_GE(dat(bucket_chann_), tr1.buc_beg_);
-    }
-    for (const auto &dat: tr1.buffer_) {
-      DCHECK_LT(dat.pt(bucket_chann_), tr1.buc_end_);
-      DCHECK_GE(dat.pt(bucket_chann_), tr1.buc_beg_);
-    }
-
-    for (const auto &dat: tr2.data_tree_) {
-      DCHECK_LT(dat(bucket_chann_), tr2.buc_end_);
-      DCHECK_GE(dat(bucket_chann_), tr2.buc_beg_);
-    }
-    for (const auto &dat: tr2.buffer_) {
-      DCHECK_LT(dat.pt(bucket_chann_), tr2.buc_end_);
-      DCHECK_GE(dat.pt(bucket_chann_), tr2.buc_beg_);
-    }
-
-    // q: what if all the keys have the same bucket element?
-    //  a: calc the number allowed for removal in the larger one, if moving the block will cross the line (another
-    //  imba), then do not move.
-
-    // 2. move across boundary
-
-    // 3. rebuild trees
-    std::sort(tr1.buffer_.begin(), tr1.buffer_.end(), [&](const auto &a, const auto &b) {
-      return a.ts < b.ts;
-    });
-
-    std::sort(tr2.buffer_.begin(), tr2.buffer_.end(), [&](const auto &a, const auto &b) {
-      return a.ts < b.ts;
-    });
-
-    tr1.popBufferMax(curr_ts);
-    tr2.popBufferMax(curr_ts);
-
-  }
+  void rebuild(int idx_t1, double curr_ts);
 
   // TO-DO: query
   void layerKNNSearch(const RetrievalKey &q_key, const int k_top, const KeyFloatType max_dist_sq,
-                      std::vector<std::pair<IndexOfKey, KeyFloatType>> &res_pairs) const {
-    // the result vector can have fewer than k result pairs.
-
-    int mid_bucket = 0;
-    for (int i = 0; i < max_num_backets_; i++) {
-      if (bucket_ranges_[i] <= q_key(bucket_chann_) && bucket_ranges_[i + 1] > q_key(bucket_chann_)) {
-        mid_bucket = i;
-        break;
-      }
-    }
-
-    KeyFloatType max_dist_sq_run = max_dist_sq;
-
-
-//    std::vector<std::pair<size_t, KeyFloatType>> res_pairs;
-    res_pairs.clear();  // all pairs are meaningful, which may fall short of k_top.
-
-    for (int i = 0; i < max_num_backets_; i++) {
-      std::vector<IndexOfKey> tmp_gidx;
-      std::vector<KeyFloatType> tmp_dists_sq;
-
-      if (i == 0) {
-        buckets_[mid_bucket].knnSearch(k_top, tmp_gidx, tmp_dists_sq, q_key, max_dist_sq_run);
-        for (int j = 0; j < k_top; j++)
-          if (tmp_dists_sq[j] < max_dist_sq_run)
-            res_pairs.emplace_back(tmp_gidx[j], tmp_dists_sq[j]);
-          else
-            break;
-
-      } else if (mid_bucket - i >= 0) {
-        if ((q_key(bucket_chann_) - bucket_ranges_[mid_bucket - i + 1]) *
-            (q_key(bucket_chann_) - bucket_ranges_[mid_bucket - i + 1]) > max_dist_sq_run) { continue; }
-        buckets_[mid_bucket - i].knnSearch(k_top, tmp_gidx, tmp_dists_sq, q_key, max_dist_sq_run);
-        for (int j = 0; j < k_top; j++)
-          if (tmp_dists_sq[j] < max_dist_sq_run)
-            res_pairs.emplace_back(tmp_gidx[j], tmp_dists_sq[j]);
-          else
-            break;
-
-      } else if (mid_bucket + i < max_num_backets_) {  // query a
-        if ((q_key(bucket_chann_) - bucket_ranges_[mid_bucket + i]) *
-            (q_key(bucket_chann_) - bucket_ranges_[mid_bucket + i]) > max_dist_sq_run) { continue; }
-        buckets_[mid_bucket + i].knnSearch(k_top, tmp_gidx, tmp_dists_sq, q_key, max_dist_sq_run);
-        for (int j = 0; j < k_top; j++)
-          if (tmp_dists_sq[j] < max_dist_sq_run)
-            res_pairs.emplace_back(tmp_gidx[j], tmp_dists_sq[j]);
-          else
-            break;
-
-      }
-      std::sort(res_pairs.begin(), res_pairs.end(),
-                [&](const std::pair<IndexOfKey, KeyFloatType> &a, const std::pair<IndexOfKey, KeyFloatType> &b) {
-                  return a.second < b.second;
-                });
-      if (res_pairs.size() >= k_top) {
-        res_pairs.resize(k_top, res_pairs[0]);
-        max_dist_sq_run = res_pairs.back().second;
-      }
-    }
-  }
+                      std::vector<std::pair<IndexOfKey, KeyFloatType>> &res_pairs) const;
 
   // TODO:
   void layerRangeSearch(const RetrievalKey &q_key, const KeyFloatType max_dist_sq,
@@ -563,28 +210,35 @@ struct LayerDB {
 
 };
 
-struct CandSimScore {
-  // Our similarity score is multi-dimensional
-  int cnt_constell_ = 0;
-  int cnt_pairwise_sim_ = 0;
-  double correlation_ = 0;
+//struct CandSimScore {
+//  // Our similarity score is multi-dimensional
+//  int cnt_constell_ = 0;
+//  int cnt_pairwise_sim_ = 0;
+//  double correlation_ = 0;
+//
+//  CandSimScore() = default;
+//
+//  CandSimScore(int cnt_chk1, int cnt_chk2, double init_corr) : cnt_constell_(cnt_chk1), cnt_pairwise_sim_(cnt_chk2),
+//                                                               correlation_(init_corr) {}
+//
+//  bool operator<(const CandSimScore &a) const {
+//    if (cnt_pairwise_sim_ == a.cnt_pairwise_sim_)
+//      return correlation_ < a.correlation_;
+//    return cnt_pairwise_sim_ < a.cnt_pairwise_sim_;
+//  }
+//
+//  bool operator>(const CandSimScore &a) const {
+//    if (cnt_pairwise_sim_ == a.cnt_pairwise_sim_)
+//      return correlation_ > a.correlation_;
+//    return cnt_pairwise_sim_ > a.cnt_pairwise_sim_;
+//  }
+//};
 
-  CandSimScore() = default;
-
-  CandSimScore(int cnt_chk1, int cnt_chk2, double init_corr) : cnt_constell_(cnt_chk1), cnt_pairwise_sim_(cnt_chk2),
-                                                               correlation_(init_corr) {}
-
-  bool operator<(const CandSimScore &a) const {
-    if (cnt_pairwise_sim_ == a.cnt_pairwise_sim_)
-      return correlation_ < a.correlation_;
-    return cnt_pairwise_sim_ < a.cnt_pairwise_sim_;
-  }
-
-  bool operator>(const CandSimScore &a) const {
-    if (cnt_pairwise_sim_ == a.cnt_pairwise_sim_)
-      return correlation_ > a.correlation_;
-    return cnt_pairwise_sim_ > a.cnt_pairwise_sim_;
-  }
+// A set of all the check parameters combined as a whole
+struct CandidateScoreEnsemble {
+  ScoreConstellSim sim_constell;
+  ScorePairwiseSim sim_pair;
+  float correlation = 0;
 };
 
 
@@ -605,8 +259,9 @@ struct CandidateManager {
   struct CandidateAnchorProp {
     std::set<ConstellationPair> constell_;  // set of constellation matches
     Eigen::Isometry2d T_delta_;  // the key feature that distinguishes different proposals
-    CandSimScore sim_score_;
+    float correlation_ = 0;
     int vote_cnt_ = 0;  // cnt of matched contours voting for this TF (not cnt of unique pairs)
+    // TODO: should we record area percentage as the metric for "votes"?
   };
 
   ///
@@ -615,22 +270,24 @@ struct CandidateManager {
     std::unique_ptr<ConstellCorrelation> corr_est_;  // generate the correlation estimator after polling all the cands
     std::vector<CandidateAnchorProp> anch_props_;
 
-    // TODO: add a anchor proposal, either merge or create new in `anch_props_`
+    // add a anchor proposal, either merge or create new in `anch_props_`
     void addProposal(const Eigen::Isometry2d &T_prop, const std::vector<ConstellationPair> &sim_pairs) {
       DCHECK_GT(sim_pairs.size(), 3);  // hard bottom line
 
       for (int i = 0; i < anch_props_.size(); i++) {
         const Eigen::Isometry2d delta_T = T_prop.inverse() * anch_props_[i].T_delta_;
-        // TODO: hardcoded threshold: 2.0m, 0.3.rad
+        // hardcoded threshold: 2.0m, 0.3.rad
         if (delta_T.translation().norm() < 2.0 && std::abs(std::atan2(delta_T(1, 0), delta_T(0, 0))) < 0.3) {
           for (const auto &pr: sim_pairs)
             anch_props_[i].constell_.insert(pr);  // unique
 
           anch_props_[i].vote_cnt_ += sim_pairs.size();  // not unique
           // TODO: Do we need the `CandSimScore` object?
-          anch_props_[i].sim_score_.cnt_pairwise_sim_ = std::max(anch_props_[i].sim_score_.cnt_pairwise_sim_,
-                                                                 (int) sim_pairs.size());
+          // A: seems no.
+//          anch_props_[i].sim_score_.cnt_pairwise_sim_ = std::max(anch_props_[i].sim_score_.cnt_pairwise_sim_,
+//                                                                 (int) sim_pairs.size());
           // TODO: Do we need to re-estimate the TF? Or just blend (manipulate with TF param and weights)?
+          // current method: naively blend parameters
 //            anch_props_[i].T_delta_ = ContourManager::getTFFromConstell();
           int w1 = anch_props_[i].vote_cnt_, w2 = sim_pairs.size();
           Eigen::Vector2d trans_bl =
@@ -652,7 +309,7 @@ struct CandidateManager {
       }
 
       if (anch_props_.size() > 3)
-        return; // limit the number of different proposals
+        return; // limit the number of different proposals w.r.t. a pose
 
       // empty set or no similar proposal
       anch_props_.emplace_back();
@@ -660,78 +317,139 @@ struct CandidateManager {
       for (const auto &pr: sim_pairs)
         anch_props_.back().constell_.insert(pr);
       anch_props_.back().vote_cnt_ = sim_pairs.size();
-      anch_props_.back().sim_score_.cnt_pairwise_sim_ = sim_pairs.size();
+//      anch_props_.back().sim_score_.cnt_pairwise_sim_ = sim_pairs.size();
 
     }
   };
 
-  CandSimScore score_lb_;  // score lower bound
+  //=============================================================
+
+//  const CandSimScore score_lb_;  // score lower/upper bound
   std::shared_ptr<const ContourManager> cm_tgt_;
+
+  // dynamic thresholds param and var for different checks. Used to replace `score_lb_`
+  const CandidateScoreEnsemble sim_ub_;  // the upper bound of check thres
+  CandidateScoreEnsemble sim_var_;   // the (dynamic) lower bound of check thres, increase with positive predictions
+
+//  // check 1: `checkConstellSim`
+//  const ScoreConstellSim sim_constell_ub_;  // the upper bound of check thres
+//  ScoreConstellSim sim_constell_var_;  // the (dynamic) lower bound of check thres, increase with positive predictions
+//  // check 2: `checkPairwiseSim`
+//  const ScorePairwiseSim sim_pair_ub_;  // the upper bound of check thres
+//  ScorePairwiseSim sim_pair_var_;
 
   // data structure
   std::map<int, int> cand_id_pos_pair_;
   std::vector<CandidatePoseData> candidates_;
 
   // bookkeeping:
-  bool adding_finished = false;
+//  bool adding_finished = false, tidy_finished=false;
+  int flow_valve = 0; // avoid to reverse the work flow
   int cand_aft_check1 = 0;  // number of candidate occurrence (not unique places) after each check
   int cand_aft_check2 = 0;
   int cand_aft_check3 = 0;
   int cand_aft_check4 = 0;
 
   CandidateManager(std::shared_ptr<const ContourManager> cm_q,
-                   const CandSimScore &score_lb) : cm_tgt_(std::move(cm_q)), score_lb_(score_lb) {}
+                   const CandidateScoreEnsemble sim_lb, const CandidateScoreEnsemble sim_ub) :
+      cm_tgt_(std::move(cm_q)), sim_var_(sim_lb), sim_ub_(sim_ub) {
+    // TO-DO: pass in sim score lb and ub as params
+    CHECK(sim_lb.sim_constell.strictSmaller(sim_ub.sim_constell));
+    CHECK(sim_lb.sim_pair.strictSmaller(sim_ub.sim_pair));
+    CHECK(sim_lb.correlation < sim_ub.correlation);
+  }
 
   /// Main func 1/3: check possible anchor pairing and add to the database
   /// \param cm_cand contour manager for the candidate
   /// \param anchor_pair "hint": the anchor for key and bci pairing
   /// \return
-  std::array<int, 4> checkCandWithHint(const std::shared_ptr<const ContourManager> &cm_cand,
-                                       const ConstellationPair &anchor_pair) {
-    CHECK(!adding_finished);
+  CandidateScoreEnsemble checkCandWithHint(const std::shared_ptr<const ContourManager> &cm_cand,
+                                           const ConstellationPair &anchor_pair) {
+    DCHECK(flow_valve == 0);
     int cand_id = cm_cand->getIntID();
-    CandSimScore curr_score;
+//    CandSimScore curr_score;
 
     // count the number of passed contour pairs in each check
-    std::array<int, 4> cnt_pass = {0, 0, 0, 0};  // 0: anchor sim; 1: constell sim; 2: constell corresp sim; 3:
+    // TODO: optimize this cnt_pass return variable
+//    std::array<int, 4> cnt_pass = {0, 0, 0, 0};  // 0: anchor sim; 1: constell sim; 2: constell corresp sim; 3:
     // Q: is it the same as `curr_score`?
+    CandidateScoreEnsemble ret_score;
 
-    // check: (1/3) anchor similarity
+    // check: (1/4) anchor similarity
     bool anchor_sim = ContourManager::checkContPairSim(*cm_cand, *cm_tgt_, anchor_pair);
-    cnt_pass[0] = int(anchor_sim);
     if (!anchor_sim)
-      return cnt_pass;
+      return ret_score;
     cand_aft_check1++;
 
-    // check (2/3): pure constellation check
+    // human readability
+    printf("Before check, curr bar:");
+    sim_var_.sim_constell.print();
+    printf("\t");
+    sim_var_.sim_pair.print();
+    printf("\n");
+
+    // check (2/4): pure constellation check
     std::vector<ConstellationPair> tmp_pairs1;
-    // TODO: dynamic thresholding
-    int num_constell_pairs = BCI::checkConstellSim(cm_cand->getBCI(anchor_pair.level, anchor_pair.seq_src),
-                                                   cm_tgt_->getBCI(anchor_pair.level, anchor_pair.seq_tgt), tmp_pairs1);
-    cnt_pass[1] = num_constell_pairs;
-    if (num_constell_pairs < score_lb_.cnt_constell_)
-      return cnt_pass;
-    curr_score.cnt_constell_ = num_constell_pairs;
+    ScoreConstellSim ret_constell_sim = BCI::checkConstellSim(cm_cand->getBCI(anchor_pair.level, anchor_pair.seq_src),
+                                                              cm_tgt_->getBCI(anchor_pair.level, anchor_pair.seq_tgt),
+                                                              sim_var_.sim_constell, tmp_pairs1);
+    ret_score.sim_constell = ret_constell_sim;
+    if (ret_constell_sim.i_overall() < sim_var_.sim_constell.i_overall())
+      return ret_score;
+//    curr_score.cnt_constell_ = ret_constell_sim;
     cand_aft_check2++;
 
-    // check (3/3): individual similarity check
+    // check (3/4): individual similarity check
     std::vector<ConstellationPair> tmp_pairs2;
-    int pairwise_sim_cnt;
-    // TODO: dynamic thresholding
-    pairwise_sim_cnt = ContourManager::checkConstellCorrespSim(*cm_cand, *cm_tgt_, tmp_pairs1, tmp_pairs2,
-                                                               score_lb_.cnt_pairwise_sim_);
-    cnt_pass[2] = pairwise_sim_cnt;
-    if (pairwise_sim_cnt < score_lb_.cnt_pairwise_sim_)
-      return cnt_pass;
-    curr_score.cnt_pairwise_sim_ = pairwise_sim_cnt;
+    ScorePairwiseSim ret_pairwise_sim = ContourManager::checkConstellCorrespSim(*cm_cand, *cm_tgt_, tmp_pairs1,
+                                                                                sim_var_.sim_pair, tmp_pairs2);
+    ret_score.sim_pair = ret_pairwise_sim;
+    if (ret_pairwise_sim.i_overall() < sim_var_.sim_pair.i_overall())
+      return ret_score;
+//    curr_score.cnt_pairwise_sim_ = ret_pairwise_sim;
     cand_aft_check3++;
 
-    // Now we assume the pair has passed all the tests. We will add the results to the candidate data structure
-    // Get the transform between the two scans
+
+    // 2. Get the transform between the two scans
     Eigen::Isometry2d T_pass = ContourManager::getTFFromConstell(*cm_cand, *cm_tgt_, tmp_pairs2.begin(),
                                                                  tmp_pairs2.end());
 
-    // add to/update candidates_
+
+//    // additional check (4/4) self censor (need transform T) NOTE: switch on to use
+//    double est_trans_norm2d = ConstellCorrelation::getEstSensTF(T_pass, cm_tgt_->getConfig()).translation().norm();
+//    if (est_trans_norm2d > 4.0) {
+//      printf("Long dist censored: %6f > %6f\n", est_trans_norm2d, 4.0);
+//      return ret_score;
+//    }
+
+    // Now we assume the pair has passed all the tests. We will add the results to the candidate data structure
+    // 2. Update the dynamic score thresholds for different
+    const int cnt_curr_valid = ret_pairwise_sim.i_overall();  // the count of pairs for this positive match
+    // 2.1 constell sim
+    auto new_const_lb = sim_var_.sim_constell;
+    new_const_lb.i_ovlp_sum = cnt_curr_valid;
+    new_const_lb.i_ovlp_max_one = cnt_curr_valid;
+    new_const_lb.i_in_ang_rng = cnt_curr_valid;
+    alignLB<ScoreConstellSim>(new_const_lb, sim_var_.sim_constell);
+    alignUB<ScoreConstellSim>(sim_ub_.sim_constell, sim_var_.sim_constell);
+
+    // 2.2 pairwise sim
+    auto new_pair_lb = sim_var_.sim_pair;
+    new_pair_lb.i_indiv_sim = cnt_curr_valid;
+    new_pair_lb.i_orie_sim = cnt_curr_valid;
+    new_pair_lb.f_area_perc = ret_pairwise_sim.f_area_perc;
+    alignLB<ScorePairwiseSim>(new_pair_lb, sim_var_.sim_pair);
+    alignUB<ScorePairwiseSim>(sim_ub_.sim_pair, sim_var_.sim_pair);
+
+    // 2.3 human readability
+    printf("Cand passed. New dynamic bar:");
+    sim_var_.sim_constell.print();
+    printf("\t");
+    sim_var_.sim_pair.print();
+    printf("\n");
+
+
+    // 3. add to/update candidates_
     auto cand_it = cand_id_pos_pair_.find(cand_id);
     if (cand_it != cand_id_pos_pair_.end()) {
       // the candidate pose exists
@@ -745,57 +463,30 @@ struct CandidateManager {
       candidates_.emplace_back(std::move(new_cand));
     }
 
-
     // correlation calculation
     // TODO: merge results for the same candidate pose
 
-
-//    GMMOptConfig gmm_config;
-//    std::unique_ptr<ConstellCorrelation> corr_est(new ConstellCorrelation(gmm_config));
-//    double corr_score_init = corr_est->initProblem(*cm_cand, *cm_tgt_, T_pass);
-//    printf("init corr score: %f\n", corr_score_init);
-//    if (corr_score_init < score_lb_.correlation_)
-//      return cnt_pass;
-//    cand_aft_check4++;
-
-//    curr_score.correlation_ = corr_score_init;
-//
-//    // add to database
-//    if (cand_it != cand_id_pos_pair_.end()) {
-//      auto &existing_cand = candidates_[cand_it->second];
-//      if (curr_score < existing_cand.sim_score_)
-//        return cnt_pass;
-//      else {
-//        existing_cand.sim_score_ = curr_score;
-//        existing_cand.T_delta_ = mat_res.first;
-//        existing_cand.cm_cand_ = cm_cand;
-//        existing_cand.corr_est_ = std::move(corr_est);
-//      }
-//    } else {
-//      CandidatePoseData new_cand;
-//      new_cand.sim_score_ = curr_score;
-//      new_cand.T_delta_ = mat_res.first;
-//      new_cand.cm_cand_ = cm_cand;
-//      new_cand.corr_est_ = std::move(corr_est);
-//      cand_id_pos_pair_.insert({cand_id, candidates_.size()});
-//      candidates_.emplace_back(std::move(new_cand));
-//    }
-
-    return cnt_pass;
+    return ret_score;
   }
 
-  // "anchor" is no longer meaningful, since we've established constellations beyond any single anchor BCI can offrt
+  // here "anchor" is no longer meaningful, since we've established constellations beyond any single anchor BCI can
+  // offer
+  // pre-calculate the correlation scores for each candidate set, and check the correlation scores.
+  /// Main func 2/3:
   void tidyUpCandidates() {
-    adding_finished = true;
+    DCHECK(flow_valve < 1);
+    flow_valve++;
     GMMOptConfig gmm_config;
-    printf("Tidy up candidates\n");
+    printf("Tidy up pose %lu candidates.\n", candidates_.size());
+
+    int cnt_to_rm = 0;
 
     // analyze the anchor pairs for each pose
     for (auto &candidate: candidates_) {
       DCHECK(!candidate.anch_props_.empty());
       // find the best T_init for setting up correlation problem estimation (based on vote)
       int idx_sel = 0;
-      for (int i = 1; i < candidate.anch_props_.size(); i++) {
+      for (int i = 1; i < candidate.anch_props_.size(); i++) {  // TODO: should we use vote count or area?
         if (candidate.anch_props_[i].vote_cnt_ > candidate.anch_props_[idx_sel].vote_cnt_)
           idx_sel = i;
       }
@@ -804,10 +495,8 @@ struct CandidateManager {
 
       // set up the correlation optimization problem for each candidate pose
       std::unique_ptr<ConstellCorrelation> corr_est(new ConstellCorrelation(gmm_config));
-      double corr_score_init = corr_est->initProblem(*(candidate.cm_cand_), *cm_tgt_,
-                                                     candidate.anch_props_[0].T_delta_);
-      candidate.anch_props_[0].sim_score_.correlation_ = corr_score_init;
-      candidate.corr_est_ = std::move(corr_est);
+      auto corr_score_init = (float) corr_est->initProblem(*(candidate.cm_cand_), *cm_tgt_,
+                                                           candidate.anch_props_[0].T_delta_);
 
       printf("Cand id:%d, init corr: %f @max# %d votes\n", candidate.cm_cand_->getIntID(), corr_score_init,
              candidate.anch_props_[0].vote_cnt_);
@@ -816,21 +505,50 @@ struct CandidateManager {
       // TODO: find the best T_best for optimization init guess (based on problem->Evaluate())
       // Is it necessary?
 
+
+      if (corr_score_init < sim_var_.correlation) { // check (4/4): correlation score.
+        printf("Low corr skipped: %6f < %6f\n", corr_score_init, sim_var_.correlation);
+        cnt_to_rm++;
+        continue;
+      }
+
+      sim_var_.correlation = corr_score_init;
+      sim_var_.correlation = sim_var_.correlation > sim_ub_.correlation ? sim_ub_.correlation : sim_var_.correlation;
+
+//      candidate.anch_props_[0].sim_score_.correlation_ = corr_score_init;
+      candidate.anch_props_[0].correlation_ = corr_score_init;
+      candidate.corr_est_ = std::move(corr_est);
     }
 
+    // remove poses failing the corr check
+    int p1 = 0, p2 = candidates_.size() - 1;
+    while (p1 <= p2) {
+      if (!candidates_[p1].corr_est_ && candidates_[p2].corr_est_) {
+        std::swap(candidates_[p1], candidates_[p2]);
+        p1++;
+        p2--;
+      } else {
+        if (candidates_[p1].corr_est_) p1++;
+        if (!candidates_[p2].corr_est_) p2--;
+      }
+    }
+    CHECK_EQ(p2 + 1 + cnt_to_rm, candidates_.size());
+    candidates_.erase(candidates_.begin() + p2 + 1, candidates_.end());
+
+    printf("Tidy up pose remaining: %lu.\n", candidates_.size());
 
   }
 
-  /// Main func 2/3: pre select hopeful pose candidates, and optimize for finer pose estimations.
-  /// \param top_n
+  /// Main func 3/3: pre select hopeful pose candidates, and optimize for finer pose estimations.
+  /// \param max_fine_opt
   /// \param res_cand
   /// \param res_corr
   /// \param res_T
   /// \return
-  int
-  fineOptimize(int top_n, std::vector<std::shared_ptr<const ContourManager>> &res_cand, std::vector<double> &res_corr,
-               std::vector<Eigen::Isometry2d> &res_T) {
-    adding_finished = true;
+  int fineOptimize(int max_fine_opt, std::vector<std::shared_ptr<const ContourManager>> &res_cand,
+                   std::vector<double> &res_corr, std::vector<Eigen::Isometry2d> &res_T) {
+    DCHECK(flow_valve < 2);
+    flow_valve++;
 
     res_cand.clear();
     res_corr.clear();
@@ -845,10 +563,11 @@ struct CandidateManager {
 //      return d1.sim_score_.correlation_ > d2.sim_score_.correlation_;
     });
 
-    int pre_sel_size = std::min(top_n, (int) candidates_.size());
+    int pre_sel_size = std::min(max_fine_opt, (int) candidates_.size());
     for (int i = 0; i < pre_sel_size; i++) {
-      auto tmp_res = candidates_[i].corr_est_->calcCorrelation();
-      candidates_[i].anch_props_[0].sim_score_.correlation_ = tmp_res.first;
+      auto tmp_res = candidates_[i].corr_est_->calcCorrelation();  // fine optimize
+//      candidates_[i].anch_props_[0].sim_score_.correlation_ = tmp_res.first;
+      candidates_[i].anch_props_[0].correlation_ = tmp_res.first;
       candidates_[i].anch_props_[0].T_delta_ = tmp_res.second;
     }
 
@@ -856,16 +575,17 @@ struct CandidateManager {
               [&](const CandidatePoseData &d1, const CandidatePoseData &d2) {
 //                return d1.sim_score_ > d2.sim_score_;
 //                return d1.sim_score_.correlation_ > d2.sim_score_.correlation_;
-                return d1.anch_props_[0].sim_score_.correlation_ > d2.anch_props_[0].sim_score_.correlation_;
+//            x    return d1.anch_props_[0].sim_score_.correlation_ > d2.anch_props_[0].sim_score_.correlation_;
+                return d1.anch_props_[0].correlation_ > d2.anch_props_[0].correlation_;
               });
 
     printf("Fine optim corr:\n");
     int ret_size = 1;  // the needed
     for (int i = 0; i < ret_size; i++) {
       res_cand.emplace_back(candidates_[i].cm_cand_);
-      res_corr.emplace_back(candidates_[i].anch_props_[0].sim_score_.correlation_);
+      res_corr.emplace_back(candidates_[i].anch_props_[0].correlation_);
       res_T.emplace_back(candidates_[i].anch_props_[0].T_delta_);
-      printf("correlation: %f\n", candidates_[i].anch_props_[0].sim_score_.correlation_);
+      printf("correlation: %f\n", candidates_[i].anch_props_[0].correlation_);
     }
 
     return ret_size;
@@ -913,17 +633,25 @@ public:
   /// \param cand_corr
   /// \param cand_tf candidates are src/old, T_tgt = T_delta * T_src
   void queryRangedKNN(const std::shared_ptr<const ContourManager> &q_ptr,
+                      const CandidateScoreEnsemble &thres_lb,
+                      const CandidateScoreEnsemble &thres_ub,
                       std::vector<std::shared_ptr<const ContourManager>> &cand_ptrs,
                       std::vector<double> &cand_corr,
                       std::vector<Eigen::Isometry2d> &cand_tf) const {
     cand_ptrs.clear();
     cand_corr.clear();
+    cand_tf.clear();
 
     double t1 = 0, t2 = 0, t3 = 0, t4 = 0, t5 = 0;
     TicToc clk;
 
-    CandSimScore score_lb(10, 5, 0.65);
-    CandidateManager cand_mng(q_ptr, score_lb);
+//    CandSimScore score_lb(10, 5, 0.65);  // TODO: use new thres init
+//    CandidateManager cand_mng(q_ptr, score_lb);
+
+
+
+//    CandidateManager cand_mng(q_ptr, s_const_lb, s_const_ub, s_pair_lb, s_pair_ub);
+    CandidateManager cand_mng(q_ptr, thres_lb, thres_ub);
 
     // for each layer
 //    std::set<size_t> matched_gidx;
@@ -976,13 +704,14 @@ public:
       }
     }
 
-    // find the best ones with fine tuning:
+    // find the best ones with fine-tuning:
     const int top_n = 5;
     std::vector<std::shared_ptr<const ContourManager>> res_cand_ptr;
     std::vector<double> res_corr;
     std::vector<Eigen::Isometry2d> res_T;
 
     clk.tic();
+    cand_mng.tidyUpCandidates();
     int num_best_cands = cand_mng.fineOptimize(top_n, res_cand_ptr, res_corr, res_T);
     t5 += clk.toc();
 

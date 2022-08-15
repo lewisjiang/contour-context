@@ -11,6 +11,7 @@
 #include <bitset>
 #include <set>
 #include <map>
+#include <string>
 #include "cont2/contour.h"
 #include "tools/algos.h"
 
@@ -30,6 +31,7 @@
 #include <utility>
 
 #include "tools/bm_util.h"
+#include "tools/algos.h"
 
 using KeyFloatType = float; // retrieval key's float number type
 //using RetrievalKey = Eigen::Matrix<KeyFloatType, 5, 1>;
@@ -98,14 +100,77 @@ struct ContourManagerConfig {
   float lidar_height_ = 2.0f;  // ground assumption
   float blind_sq_ = 9.0f;
 
-  int cont_cnt_thres_ = 5; // the cell count threshold dividing a shaped blob from a point
+//  int cont_cnt_thres_ = 5; // the cell count threshold dividing a shaped blob from a point
   int min_cont_key_cnt_ = 9;  // minimal the cell count to calculate a valid key around an anchor contour
-  int min_cont_cell_cnt_ = 3; // the minimal
+  int min_cont_cell_cnt_ = 3; // the minimal cell cnt to consider creating a contour
 };
 
 const int16_t BITS_PER_LAYER = 64;
-const int8_t DIST_BIN_LAYERS[] = {1, 2, 3, 4};  // the layers for the dist key
+const int8_t DIST_BIN_LAYERS[] = {1, 2, 3, 4};  // the layers for generating the dist key
+const float LAYER_AREA_WEIGHTS[] = {0.3, 0.3, 0.3,
+                                    0.1};  // weights for each layer when calculating a normalized "used area percentage"
 const int16_t NUM_BIN_KEY_LAYER = sizeof(DIST_BIN_LAYERS) / sizeof(int8_t);
+
+
+// scores for checks
+// i: int, typically for counts. f: float, just represented in int.
+union ScoreConstellSim {
+  enum {
+    SizeAtCompileTime = 3
+  };
+  int data[3]{};
+  struct {
+    int i_ovlp_sum;
+    int i_ovlp_max_one;
+    int i_in_ang_rng;
+  };
+
+  inline int i_overall() const {
+    // Manually select a thres in the check as the score for the overall check to pass.
+    return i_in_ang_rng;
+  }
+
+  void print() const {
+    printf("%d, %d, %d;", i_ovlp_sum, i_ovlp_max_one, i_in_ang_rng);
+  }
+
+  bool strictSmaller(const ScoreConstellSim &b) const {
+    for (int i = 0; i < SizeAtCompileTime; i++) {
+      if (data[i] >= b.data[i])
+        return false;
+    }
+    return true;
+  }
+};
+
+union ScorePairwiseSim {
+  enum {
+    SizeAtCompileTime = 3
+  };
+  int data[3]{};
+  struct {
+    int i_indiv_sim;
+    int i_orie_sim;
+    int f_area_perc;  // the area score is a weighted sum of used area percentage of all concerning levels, normalized to int(100)
+  };
+
+  inline int i_overall() const {
+    // Manually select a thres in the check as the min requirement for the overall check to pass.
+    return i_orie_sim;
+  }
+
+  void print() const {
+    printf("%d, %d, %d%%;", i_indiv_sim, i_orie_sim, f_area_perc);
+  }
+
+  bool strictSmaller(const ScorePairwiseSim &b) const {
+    for (int i = 0; i < SizeAtCompileTime; i++) {
+      if (data[i] >= b.data[i])
+        return false;
+    }
+    return true;
+  }
+};
 
 union ConstellationPair {  // given a pair of ContourManager, this records the seq of 2 "matched" contours at a certain level
   struct {
@@ -168,21 +233,32 @@ struct BCI { //binary constellation identity
 
   explicit BCI(int8_t seq, int8_t lev) : dist_bin_(0), piv_seq_(seq), level_(lev) {}
 
-  // check the similarity of two BCI in terms of implicit constellation
-  static int checkConstellSim(const BCI &src, const BCI &tgt, std::vector<ConstellationPair> &constell_res) {
+  /// Check the similarity of two BCI in terms of implicit constellation centered at the anchor
+  /// \param src
+  /// \param tgt
+  /// \param lb low bar thresholds for the checks in this function
+  /// \param constell_res
+  /// \return the number of pairs of stars that pass the checks (negative numbers are for human readability)
+  static ScoreConstellSim checkConstellSim(const BCI &src, const BCI &tgt, const ScoreConstellSim &lb,
+                                           std::vector<ConstellationPair> &constell_res) {
     DCHECK_EQ(src.level_, tgt.level_);
-    std::bitset<BITS_PER_LAYER * NUM_BIN_KEY_LAYER> res1, res2, res3;
-    res1 = src.dist_bin_ & tgt.dist_bin_;
-    res2 = (src.dist_bin_ << 1) & tgt.dist_bin_;
-    res3 = (src.dist_bin_ >> 1) & tgt.dist_bin_;
-    int ovlp1 = res1.count(), ovlp2 = res2.count(), ovlp3 = res3.count();
+    std::bitset<BITS_PER_LAYER * NUM_BIN_KEY_LAYER> and1, and2, and3;
+    and1 = src.dist_bin_ & tgt.dist_bin_;
+    and2 = (src.dist_bin_ << 1) & tgt.dist_bin_;
+    and3 = (src.dist_bin_ >> 1) & tgt.dist_bin_;
+    int ovlp1 = and1.count(), ovlp2 = and2.count(), ovlp3 = and3.count();
     int ovlp_sum = ovlp1 + ovlp2 + ovlp3;
-    int max_ele = std::max(ovlp1, std::max(ovlp2, ovlp3));
+    int max_one = std::max(ovlp1, std::max(ovlp2, ovlp3));
+
+    ScoreConstellSim ret;  // return a score object, and check it outside with some bars to determine P/N
+
+    ret.i_ovlp_sum = ovlp_sum;
+    ret.i_ovlp_max_one = max_one;
 
 //    std::cout << src.dist_bin_ << std::endl << tgt.dist_bin_ << std::endl;
 
     // the anchors are assumed to be matched
-    if (ovlp_sum >= 9 && max_ele >= 5) {  // TODO: use config instead of hardcoded
+    if (ovlp_sum >= lb.i_ovlp_sum && max_one >= lb.i_ovlp_max_one) {  // TODO: use config instead of hardcoded
       // check the angular for constellation
       std::vector<DistSimPair> potential_pairs;
 
@@ -220,29 +296,31 @@ struct BCI { //binary constellation identity
       });
 
       const float angular_range = M_PI / 16; // 0.2 rad, 11 deg
-      const int thres_in_range = 5;  // the min number of pairs in range that assumed to be the true delta theta
-      int max_in_range_beg = 0, max_in_range = 1, pot_sz = potential_pairs.size(), p1 = 0, p2 = 0;
+      int longest_in_range_beg = 0, longest_in_range = 1, pot_sz = potential_pairs.size(), p1 = 0, p2 = 0;
       while (p1 < pot_sz) {
         if (potential_pairs[p2 % pot_sz].orie_diff - potential_pairs[p1].orie_diff + 2 * M_PI * int(p2 / pot_sz) >
             angular_range)
           p1++;
         else {
-          if (p2 - p1 + 1 > max_in_range) {
-            max_in_range = p2 - p1 + 1;
-            max_in_range_beg = p1;
+          if (p2 - p1 + 1 > longest_in_range) {
+            longest_in_range = p2 - p1 + 1;
+            longest_in_range_beg = p1;
           }
           p2++;
         }
       }
 
-      if (max_in_range < thres_in_range)
-        return -10 * max_in_range; // ret code -2: not enough pairs with matched dist pass the angular check
+      ret.i_in_ang_rng = longest_in_range;
+
+      if (longest_in_range <
+          lb.i_in_ang_rng)  // the min number of pairs in range that assumed to be the true delta theta
+        return ret; // ret code -2: not enough pairs with matched dist pass the angular check
 
       constell_res.clear();
-      constell_res.reserve(max_in_range + 1);
+      constell_res.reserve(longest_in_range + 1);
 
       // TODO: solve potential one-to-many matching ambiguity
-      for (int i = max_in_range_beg; i < max_in_range + max_in_range_beg; i++) {
+      for (int i = longest_in_range_beg; i < longest_in_range + longest_in_range_beg; i++) {
         constell_res.emplace_back(potential_pairs[i % pot_sz].level, potential_pairs[i % pot_sz].seq_src,
                                   potential_pairs[i % pot_sz].seq_tgt);
       }
@@ -253,11 +331,11 @@ struct BCI { //binary constellation identity
         return a.level < b.level || (a.level == b.level) && a.seq_src < b.seq_src;
       });
 
-      return constell_res.size();
+      return ret;
 
 
     } else {
-      return -(100 * ovlp_sum + max_ele); // ret code -1: not passing dist binary check
+      return ret; // ret code -1: not passing dist binary check
     }
   }
 };
@@ -959,43 +1037,45 @@ public:
   /// \param sim_idx if return true, this contains the index of ids_{src|tgt} survived pairwise similarity check. Values
   ///     taken from [0, ids_tgt.size()).
   /// \return the number of matched...
-  static int  // int: human readability
-  checkConstellCorrespSim(const ContourManager &src, const ContourManager &tgt,
-                          const std::vector<ConstellationPair> &cstl_in,
-                          std::vector<ConstellationPair> &cstl_out, const int &min_pair) {
+  static ScorePairwiseSim checkConstellCorrespSim(const ContourManager &src, const ContourManager &tgt,
+                                                  const std::vector<ConstellationPair> &cstl_in,
+                                                  const ScorePairwiseSim &lb,
+                                                  std::vector<ConstellationPair> &cstl_out) {
     // cross level consensus (CLC)
     // The rough constellation should have been established.
     DCHECK_EQ(src.cont_views_.size(), tgt.cont_views_.size());
 
-    int matched_cnt{};
+//    int matched_cnt{};
+    ScorePairwiseSim ret;
+
     std::map<int, std::pair<float, float>> lev_frac;  // {lev:[src, tgt], }
 
     cstl_out.clear();
-    int num_sim = 0;
     // 1. check individual sim
     printf("check individual sim of the constellation:\n");
-    for (auto i: cstl_in) {
-//      if (ContourView::checkSim(*src.cont_views_[cstl_in[i].level][cstl_in[i].seq_src],
-//                                *tgt.cont_views_[cstl_in[i].level][cstl_in[i].seq_tgt]))
+    for (auto pr: cstl_in) {
+//      if (ContourView::checkSim(*src.cont_views_[cstl_in[pr].level][cstl_in[pr].seq_src],
+//                                *tgt.cont_views_[cstl_in[pr].level][cstl_in[pr].seq_tgt]))
       bool curr_success = false;
-      if (checkContPairSim(src, tgt, i)) {
-        cstl_out.push_back(i);
-        auto &it = lev_frac[i.level];
-        it.first += src.cont_perc_[i.level][i.seq_src];
-        it.second += tgt.cont_perc_[i.level][i.seq_tgt];
+      if (checkContPairSim(src, tgt, pr)) {
+        cstl_out.push_back(pr);
+        auto &it = lev_frac[pr.level];
+        it.first += src.cont_perc_[pr.level][pr.seq_src];
+        it.second += tgt.cont_perc_[pr.level][pr.seq_tgt];
         curr_success = true;
       }
 
-      printf("%d@lev %d, %d-%d\n", int(curr_success), i.level, i.seq_src, i.seq_tgt);
+      printf("%d@lev %d, %d-%d\n", int(curr_success), pr.level, pr.seq_src, pr.seq_tgt);
     }
 
     for (const auto &rec: lev_frac) {
       printf("matched percent lev: %d, %.3f/%.3f\n", rec.first, rec.second.first, rec.second.second);
     }
 
-    matched_cnt = cstl_out.size();
-    if (cstl_out.size() < min_pair)
-      return matched_cnt;  // TODO: use cross level consensus to find more possible matched pairs
+
+    ret.i_indiv_sim = cstl_out.size();
+    if (ret.i_indiv_sim < lb.i_indiv_sim)
+      return ret;  // TODO: use cross level consensus to find more possible matched pairs
 
     // 2. check orientation
     // 2.1 get major axis direction
@@ -1012,7 +1092,7 @@ public:
       }
     }
     // 2.2 if both src and tgt contour are orientationally salient but the orientations largely differ, remove the pair
-    num_sim = cstl_out.size();
+    int num_sim = cstl_out.size();
     for (int i = 0; i < num_sim;) {
       const auto &sc1 = src.cont_views_[cstl_out[i].level][cstl_out[i].seq_src],
           &tc1 = tgt.cont_views_[cstl_out[i].level][cstl_out[i].seq_tgt];
@@ -1028,9 +1108,9 @@ public:
       i++;
     }
     cstl_out.erase(cstl_out.begin() + num_sim, cstl_out.end()); // sure to reduce size, without default constructor
-    matched_cnt = cstl_out.size();
-    if (cstl_out.size() < min_pair)
-      return matched_cnt;  // TODO: use cross level consensus to find more possible matched pairs
+    ret.i_orie_sim = cstl_out.size();
+    if (ret.i_orie_sim < lb.i_orie_sim)
+      return ret;  // TODO: use cross level consensus to find more possible matched pairs
 
     std::sort(cstl_out.begin(), cstl_out.end());  // human readability
 
@@ -1051,7 +1131,14 @@ public:
       printf("lev: %d, src: %4.2f, tgt: %4.2f\n", i, level_perc_used_src[i], level_perc_used_tgt[i]);
     }
 
-    return matched_cnt;
+    float perc = 0;
+    for (int i = 0; i < NUM_BIN_KEY_LAYER; i++) {
+      perc += LAYER_AREA_WEIGHTS[i] *
+              (level_perc_used_src[DIST_BIN_LAYERS[i]] + level_perc_used_tgt[DIST_BIN_LAYERS[i]]) / 2;
+    }
+    ret.f_area_perc = int(perc * 100);
+
+    return ret;
 
 //    // 3. estimate transform using the data from current level
 //    Eigen::Matrix<double, 2, Eigen::Dynamic> pointset1; // src
