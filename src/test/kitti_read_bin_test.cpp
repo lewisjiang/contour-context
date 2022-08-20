@@ -105,7 +105,10 @@ int main(int argc, char **argv) {
   printf("read bin start 0\n");
 
   // kitti 05
-  std::string kitti_raw_dir = "/home/lewis/Downloads/datasets/kitti_raw", date = "2011_09_30", seq = "2011_09_30_drive_0018_sync";
+//  std::string kitti_raw_dir = "/home/lewis/Downloads/datasets/kitti_raw", date = "2011_09_30", seq = "2011_09_30_drive_0018_sync";
+
+  // kitti 00
+  std::string kitti_raw_dir = "/home/lewis/Downloads/datasets/kitti_raw", date = "2011_10_03", seq = "2011_10_03_drive_0027_sync";
   ReadKITTILiDAR reader(kitti_raw_dir, date, seq);
 
 //  // visualize gt poses and index
@@ -131,7 +134,10 @@ int main(int argc, char **argv) {
 //  int idx_old = 905, idx_new = 2636;  // final straight road loop
 //  int idx_old = 890, idx_new = 2632;  // final straight road loop
 
-  int idx_old = 806, idx_new = 1562;  // seek farther. 1562:793, 1563:816, nearest old: 808
+//  int idx_old = 806, idx_new = 1562;  // seek farther. 1562:793, 1563:816, nearest old: 808
+
+  // sequence 00
+  int idx_old = 486, idx_new = 1333;  //
 
 
   std::string s_old, s_new;
@@ -181,12 +187,25 @@ int main(int argc, char **argv) {
   thres_lb.sim_pair.i_orie_sim = 4;
   thres_ub.sim_pair.i_orie_sim = 6;
 
-  thres_lb.sim_pair.f_area_perc = 5; // 0.05;
-  thres_ub.sim_pair.f_area_perc = 15; // 0.15;
+//  thres_lb.sim_pair.f_area_perc = 5; // 0.05;
+//  thres_ub.sim_pair.f_area_perc = 15; // 0.15;
 
   // a.3 correlation
-  thres_lb.correlation = 0.65;
-  thres_ub.correlation = 0.75;
+//  thres_lb.correlation = 0.65;
+//  thres_ub.correlation = 0.75;
+//
+//  thres_lb.area_perc = 0.05;
+//  thres_ub.area_perc = 0.10;
+
+  thres_lb.sim_post.correlation = 0.65;
+  thres_ub.sim_post.correlation = 0.65;
+
+  thres_lb.sim_post.area_perc = 0.05;
+  thres_ub.sim_post.area_perc = 0.10;
+
+  thres_lb.sim_post.neg_est_dist = -8.0;
+  thres_ub.sim_post.neg_est_dist = -4.5;
+
 
   CandidateManager cand_mng(cmng_ptr_new, thres_lb, thres_ub);
 
@@ -224,7 +243,6 @@ int main(int argc, char **argv) {
 
       }
     }
-    printf("BF level compare key finished.\n");
   }
 
 //  // manual constellation case 1: combine 2 matches from different anchors
@@ -277,7 +295,7 @@ int main(int argc, char **argv) {
 //  0         0         1
 
   if (T_init.matrix() == Eigen::Isometry2d::Identity().matrix()) {
-    printf("No valid T init produced from the matching.");
+    printf("\n===\nOverall, no valid T init produced from the whole matching.");
     return 0;
   }
 

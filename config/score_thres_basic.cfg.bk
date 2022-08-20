@@ -1,0 +1,10 @@
+i_ovlp_sum          5       10
+i_ovlp_max_one      4       6
+i_in_ang_rng        4       6
+
+i_indiv_sim         4       6
+i_orie_sim          4       6
+f_area_perc         5       10
+
+correlation         0.65    0.75    
+area_perc           0.05    0.10

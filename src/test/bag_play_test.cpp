@@ -45,6 +45,15 @@ struct SimpleRMSE {
 };
 
 class RosBagPlayLoopTest {
+  struct GlobalPoseInfo {
+    Eigen::Isometry3d T_wl;
+    double z_shift{};
+
+    GlobalPoseInfo(const Eigen::Isometry3d &a, const double &b) : T_wl(a), z_shift(b) {}
+
+    GlobalPoseInfo() {}
+  };
+
   // ros stuff
   ros::NodeHandle nh;
   ros::Publisher pub_path;
@@ -53,22 +62,28 @@ class RosBagPlayLoopTest {
   nav_msgs::Path path_msg;
   visualization_msgs::MarkerArray line_array;
   visualization_msgs::MarkerArray idx_text_array;
+  tf2_ros::Buffer tfBuffer;
+  tf2_ros::TransformListener tfListener;
 
-  std::vector<std::shared_ptr<ContourManager>> scans;
+//  std::vector<std::shared_ptr<ContourManager>> scans;
   ContourDB contour_db;
-  std::vector<Eigen::Isometry3d> gt_poses;
-  std::vector<double> poses_time_z_shift;
+
+  // The data used for general purpose (w/o gt files, etc.) in the work flow
+  std::map<int, GlobalPoseInfo> g_poses;
+
+  // The raw data read from extra content of the dataset
   std::vector<double> all_raw_time_stamps;
   std::vector<Eigen::Isometry3d> all_raw_gt_l_poses;
+
   int seq_beg;
   int seq_end;
   Eigen::Isometry3d T_lc_velod_;    // points in velodyne to left camera, Tr
 
-  Cont2_ROS_IO<pcl::PointXYZ> ros_io;
+  Cont2_ROS_IO<pcl::PointXYZ> ros_io;  // data (e.g. point cloud) loader to work with ros.
 
-  tf2_ros::Buffer tfBuffer;
-  tf2_ros::TransformListener tfListener;
-  int lc_cnt{}, seq_cnt{};
+  CandidateScoreEnsemble thres_lb_, thres_ub_;  // check thresholds
+
+  int lc_cnt{};
   int lc_tp_pose_cnt{}, lc_fn_pose_cnt{}, lc_fp_pose_cnt{};
   SimpleRMSE<2> trans_rmse;
   SimpleRMSE<1> rot_rmse;
@@ -82,9 +97,9 @@ public:
   explicit RosBagPlayLoopTest(ros::NodeHandle &nh_, int idx_beg, int idx_end,
                               uint64_t t_seq_beg_ns = 12345) : nh(nh_), seq_beg(idx_beg), seq_end(idx_end),
                                                                ros_io(0, "/velodyne_points", nh_, t_seq_beg_ns),
-                                                               tfListener(tfBuffer), contour_db(ContourDBConfig(),
-                                                                                                std::vector<int>(
-                                                                                                    {1, 2, 3})) {
+                                                               tfListener(tfBuffer),
+                                                               contour_db(ContourDBConfig(),
+                                                                          std::vector<int>({1, 2, 3})) {
     path_msg.header.frame_id = "world";
     pub_path = nh_.advertise<nav_msgs::Path>("/gt_path", 10000);
     pub_pose_idx = nh_.advertise<visualization_msgs::MarkerArray>("/pose_index", 10000);
@@ -93,6 +108,7 @@ public:
     T_lc_velod_.setIdentity();
   }
 
+  // call before spin 1/3
   void loadRawTs(const std::string &f_raw_ts) {
     std::fstream ts_file;
     ts_file.open(f_raw_ts, std::ios::in);
@@ -111,22 +127,7 @@ public:
     printf("%lu timestamps loaded.\n", all_raw_time_stamps.size());
   }
 
-  // given the ts, find the sequence id of the nearest ts
-  int lookupTs(double ts_query, double tol = 1e-3) const {
-    auto it_low = std::lower_bound(all_raw_time_stamps.begin(), all_raw_time_stamps.end(), ts_query);
-    auto it = it_low;
-    if (it_low == all_raw_time_stamps.begin()) {
-      it = it_low;
-    } else if (it_low == all_raw_time_stamps.end()) {
-      it = it_low - 1;
-    } else {
-      it = std::abs(ts_query - *it_low) < std::abs(ts_query - *(it_low - 1)) ?
-           it_low : it_low - 1;
-    }
-    CHECK(std::abs(*it - ts_query) < tol);
-    return it_low - all_raw_time_stamps.begin();
-  }
-
+  // call before spin 2/3
   // TODO: load gt and use it in
   void loadSeqGT(const std::string &f_seq_calib, const std::string &f_seq_gt_pose) {
     // 1. calibration
@@ -174,7 +175,7 @@ public:
     Eigen::Isometry3d T_w_lc0;
     T_w_lc0.setIdentity();
 
-    // moving along z to moving along y ()
+    // moving along z to moving along y (The difference between init left cam pose (lc0) and the fixed z-up world frame)
     T_w_lc0.rotate(Eigen::AngleAxisd(-M_PI / 2, Eigen::Vector3d(1, 0, 0)));  // TODO: for vis
 
     while (std::getline(gt_pose_file, strbuf)) {
@@ -204,6 +205,72 @@ public:
     printf("%lu gt poses loaded.\n", all_raw_gt_l_poses.size());
   }
 
+  void setCheckThres(const CandidateScoreEnsemble &lb, const CandidateScoreEnsemble &ub) {
+    thres_lb_ = lb;
+    thres_ub_ = ub;
+  }
+
+  // call before spin 3/3
+  // load check thres
+  void loadCheckThres(const std::string &fpath) {
+    std::fstream infile;
+    infile.open(fpath, std::ios::in);
+
+    if (infile.rdstate() != std::ifstream::goodbit) {
+      std::cerr << "Error opening thres config file: " << fpath << std::endl;
+      return;
+    }
+
+    std::string sbuf, pname;
+    while (std::getline(infile, sbuf)) {
+      std::istringstream iss(sbuf);
+      if (iss >> pname) {
+        std::cout << pname << std::endl;
+        if (pname[0] == '#')
+          continue;
+        if (pname == "i_ovlp_sum") {
+          iss >> thres_lb_.sim_constell.i_ovlp_sum;
+          iss >> thres_ub_.sim_constell.i_ovlp_sum;
+        } else if (pname == "i_ovlp_max_one") {
+          iss >> thres_lb_.sim_constell.i_ovlp_max_one;
+          iss >> thres_ub_.sim_constell.i_ovlp_max_one;
+        } else if (pname == "i_in_ang_rng") {
+          iss >> thres_lb_.sim_constell.i_in_ang_rng;
+          iss >> thres_ub_.sim_constell.i_in_ang_rng;
+        } else if (pname == "i_indiv_sim") {
+          iss >> thres_lb_.sim_pair.i_indiv_sim;
+          iss >> thres_ub_.sim_pair.i_indiv_sim;
+        } else if (pname == "i_orie_sim") {
+          iss >> thres_lb_.sim_pair.i_orie_sim;
+          iss >> thres_ub_.sim_pair.i_orie_sim;
+//        } else if (pname == "f_area_perc") {
+//          iss >> thres_lb_.sim_pair.f_area_perc;
+//          iss >> thres_ub_.sim_pair.f_area_perc;
+//        } else if (pname == "correlation") {
+//          iss >> thres_lb_.correlation;
+//          iss >> thres_ub_.correlation;
+//        } else if (pname == "area_perc") {
+//          iss >> thres_lb_.area_perc;
+//          iss >> thres_ub_.area_perc;
+//        }
+
+        } else if (pname == "correlation") {
+          iss >> thres_lb_.sim_post.correlation;
+          iss >> thres_ub_.sim_post.correlation;
+        } else if (pname == "area_perc") {
+          iss >> thres_lb_.sim_post.area_perc;
+          iss >> thres_ub_.sim_post.area_perc;
+        } else if (pname == "neg_est_dist") {
+          iss >> thres_lb_.sim_post.neg_est_dist;
+          iss >> thres_ub_.sim_post.neg_est_dist;
+        }
+      }
+    }
+
+    infile.close();
+  }
+
+  // spin
   void processOnce(int &cnt) {
 
     pcl::PointCloud<pcl::PointXYZ>::ConstPtr out_ptr = nullptr;
@@ -226,7 +293,21 @@ public:
       return;
     }
 
-    tf_gt_last = tf2::eigenToTransform(all_raw_gt_l_poses[scan_seq - seq_beg]); // case 2: use sequence gt
+//    // case 1: use count as id
+//    int curr_id = cnt;
+    // case 2: use dataset frame seq id
+    int curr_id = scan_seq;
+
+    // case 1: use gps-imu data as pose (comment the line below)
+    tf_gt_last = tf2::eigenToTransform(all_raw_gt_l_poses[scan_seq - seq_beg]); // case 2: use dataset sequence gt
+
+    printf("---\nour counted seq: %d, kitti seq: %d, curr_id: %d, stamp: %lu\n", cnt, scan_seq, curr_id, time.toNSec());
+
+    static tf2_ros::TransformBroadcaster br;
+    tf_gt_last.header.stamp = ros::Time::now();
+    tf_gt_last.header.frame_id = "world";
+    tf_gt_last.child_frame_id = "gt_curr";
+    br.sendTransform(tf_gt_last);
 
     std::cout << "trans z: " << tf_gt_last.transform.translation.z << std::endl;
 
@@ -236,21 +317,20 @@ public:
     Eigen::Vector3d time_translate(0, 0, 1);
     time_translate = time_translate * (time.toSec() - time_beg.toSec()) / 60;   // elevate 1m per minute
 
-    gt_poses.emplace_back(T_gt_last);
-    poses_time_z_shift.emplace_back(time_translate.z());
+    g_poses.insert(std::make_pair(curr_id, GlobalPoseInfo(T_gt_last, time_translate.z())));
+//    gt_poses.emplace_back(T_gt_last);
+//    poses_time_z_shift.emplace_back(time_translate.z());
 
     tf_gt_last.transform.translation.z += time_translate.z();// elevate 1m per minute
     publishPath(time, tf_gt_last);
     publishScanSeqText(time, tf_gt_last, scan_seq);
-
-    printf("---\nour counted seq: %d, kitti seq: %d, stamp: %lu\n", cnt, scan_seq, time.toNSec());
 
 
     std::vector<std::pair<int, int>> new_lc_pairs;
 
     ContourManagerConfig config;
     config.lv_grads_ = {1.5, 2, 2.5, 3, 3.5, 4};
-    std::shared_ptr<ContourManager> cmng_ptr(new ContourManager(config, cnt));
+    std::shared_ptr<ContourManager> cmng_ptr(new ContourManager(config, curr_id));
     cmng_ptr->makeBEV<pcl::PointXYZ>(out_ptr);
 //      cmng_ptr.makeContours();
     cmng_ptr->makeContoursRecurs();
@@ -273,34 +353,8 @@ public:
     std::vector<Eigen::Isometry2d> bev_tfs;
     clk.tic();
 
-    // init similarity thres params
-    CandidateScoreEnsemble thres_lb, thres_ub;
-    // a.1 constellation similarity
-    thres_lb.sim_constell.i_ovlp_sum = 5;
-    thres_ub.sim_constell.i_ovlp_sum = 10;
-
-    thres_lb.sim_constell.i_ovlp_max_one = 4;
-    thres_ub.sim_constell.i_ovlp_max_one = 6;
-
-    thres_lb.sim_constell.i_in_ang_rng = 4;
-    thres_ub.sim_constell.i_in_ang_rng = 6;
-
-    // a.2 pairwise similarity
-    thres_lb.sim_pair.i_indiv_sim = 4;
-    thres_ub.sim_pair.i_indiv_sim = 6;
-
-    thres_lb.sim_pair.i_orie_sim = 4;
-    thres_ub.sim_pair.i_orie_sim = 6;
-
-    thres_lb.sim_pair.f_area_perc = 5; // 0.05;
-    thres_ub.sim_pair.f_area_perc = 10; // 0.15;
-
-    // a.3 correlation
-    thres_lb.correlation = 0.65;
-    thres_ub.correlation = 0.75;
-
 //    contour_db.queryRangedKNN(cmng_ptr, candidate_loop, cand_corr, bev_tfs);
-    contour_db.queryRangedKNN(cmng_ptr, thres_lb, thres_ub, candidate_loop, cand_corr, bev_tfs);
+    contour_db.queryRangedKNN(cmng_ptr, thres_lb_, thres_ub_, candidate_loop, cand_corr, bev_tfs);
     printf("%lu Candidates in %7.5fs: \n", candidate_loop.size(), clk.toc());
 
     bool has_tp_lc = false;
@@ -308,15 +362,15 @@ public:
 
     CHECK(candidate_loop.size() < 2); // TODO: at most one candidate
     for (int j = 0; j < candidate_loop.size(); j++) {
-      printf("Matching new: %d with old: %d:", cnt, candidate_loop[j]->getIntID());
-      new_lc_pairs.emplace_back(cnt, candidate_loop[j]->getIntID());
+      printf("Matching new: %d with old: %d:", curr_id, candidate_loop[j]->getIntID());
+      new_lc_pairs.emplace_back(curr_id, candidate_loop[j]->getIntID());
 
       // record "valid" loop closure
-      auto tf_err = ConstellCorrelation::evalMetricEst(bev_tfs[j], gt_poses[new_lc_pairs.back().second],
-                                                       gt_poses[new_lc_pairs.back().first], config);
+      auto tf_err = ConstellCorrelation::evalMetricEst(bev_tfs[j], g_poses[new_lc_pairs.back().second].T_wl,
+                                                       g_poses[new_lc_pairs.back().first].T_wl, config);
       double est_trans_norm2d = ConstellCorrelation::getEstSensTF(bev_tfs[j], config).translation().norm();
-      double gt_trans_norm3d = (gt_poses[new_lc_pairs.back().first].translation() -
-                                gt_poses[new_lc_pairs.back().second].translation()).norm();
+      double gt_trans_norm3d = (g_poses[new_lc_pairs.back().first].T_wl.translation() -
+                                g_poses[new_lc_pairs.back().second].T_wl.translation()).norm();
       printf(" Dist: Est2d: %.2f; GT3d: %.2f\n", est_trans_norm2d, gt_trans_norm3d);
 
       // metric error benchmark
@@ -350,8 +404,8 @@ public:
       lc_fp_pose_cnt++;
     else {
       bool has_fn = false;
-      for (int i = 0; i < cnt - 150; i++) {
-        double dist = (gt_poses[i].translation() - gt_poses[cnt].translation()).norm();
+      for (int i = 0; i < curr_id - 150; i++) {
+        double dist = (g_poses[i].T_wl.translation() - g_poses[curr_id].T_wl.translation()).norm();
         if (dist < 4.0) {
           printf("False Negative: %d-%d, %f\n", i, cnt, dist);
           has_fn = true;
@@ -365,7 +419,7 @@ public:
     contour_db.addScan(cmng_ptr, time.toSec());
     // 2.3 balance
     clk.tic();
-    contour_db.pushAndBalance(seq_cnt++, time.toSec());
+    contour_db.pushAndBalance(curr_id, time.toSec());
     printf("Rebalance tree cost: %7.5f\n", clk.toc());
 
     // plot
@@ -378,6 +432,21 @@ public:
 
   }
 
+  // given the ts, find the sequence id of the nearest ts
+  int lookupTs(double ts_query, double tol = 1e-3) const {
+    auto it_low = std::lower_bound(all_raw_time_stamps.begin(), all_raw_time_stamps.end(), ts_query);
+    auto it = it_low;
+    if (it_low == all_raw_time_stamps.begin()) {
+      it = it_low;
+    } else if (it_low == all_raw_time_stamps.end()) {
+      it = it_low - 1;
+    } else {
+      it = std::abs(ts_query - *it_low) < std::abs(ts_query - *(it_low - 1)) ?
+           it_low : it_low - 1;
+    }
+    CHECK(std::abs(*it - ts_query) < tol);
+    return it_low - all_raw_time_stamps.begin();
+  }
 
   void publishPath(ros::Time time, const geometry_msgs::TransformStamped &tf_gt_last) {
     path_msg.header.stamp = time;
@@ -434,16 +503,16 @@ public:
       marker.action = visualization_msgs::Marker::ADD;
       marker.type = visualization_msgs::Marker::LINE_STRIP;
 
-      double len = (gt_poses[pr.first].translation() - gt_poses[pr.second].translation()).norm();
+      double len = (g_poses[pr.first].T_wl.translation() - g_poses[pr.second].T_wl.translation()).norm();
 
       geometry_msgs::Point p1;
-      p1.x = gt_poses[pr.first].translation().x();
-      p1.y = gt_poses[pr.first].translation().y();
-      p1.z = gt_poses[pr.first].translation().z() + poses_time_z_shift[pr.first];
+      p1.x = g_poses[pr.first].T_wl.translation().x();
+      p1.y = g_poses[pr.first].T_wl.translation().y();
+      p1.z = g_poses[pr.first].T_wl.translation().z() + g_poses[pr.first].z_shift;
       marker.points.emplace_back(p1);
-      p1.x = gt_poses[pr.second].translation().x();
-      p1.y = gt_poses[pr.second].translation().y();
-      p1.z = gt_poses[pr.second].translation().z() + poses_time_z_shift[pr.second];
+      p1.x = g_poses[pr.second].T_wl.translation().x();
+      p1.y = g_poses[pr.second].T_wl.translation().y();
+      p1.z = g_poses[pr.second].T_wl.translation().z() + g_poses[pr.second].z_shift;
       marker.points.emplace_back(p1);
 
       marker.lifetime = ros::Duration();
@@ -474,15 +543,59 @@ int main(int argc, char **argv) {
 
   printf("tag 0\n");
 
+  // Check thres path
+  std::string cand_score_config = "/home/lewis/catkin_ws2/src/contour-context/config/score_thres_kitti_bag_play.cfg";
+
+  // KITTI seq 05:
   uint64_t t_seq_beg = 100000;
   int p1 = 0, p2 = 2760;
   std::string ts_path = "/home/lewis/catkin_ws2/src/contour-context/results/kitti_seq05_seconds.txt";
   std::string gt_pose_path = "/home/lewis/Downloads/KITTI_data/dataset_gt/poses/05.txt";
   std::string seq_calib_path = "/home/lewis/Downloads/KITTI_data/dataset/sequences/05/calib.txt";
 
+  // KITTI seq 00:
+//  uint64_t t_seq_beg = 100000; // any small ts
+//  int p1 = 0, p2 = 4540;
+//  std::string ts_path = "/home/lewis/catkin_ws2/src/contour-context/results/kitti_seq00_seconds.txt";
+//  std::string gt_pose_path = "/home/lewis/Downloads/KITTI_data/dataset_gt/poses/00.txt";
+//  std::string seq_calib_path = "/home/lewis/Downloads/KITTI_data/dataset/sequences/00/calib.txt";
+
   RosBagPlayLoopTest o(nh, p1, p2, t_seq_beg);
   o.loadRawTs(ts_path);
   o.loadSeqGT(seq_calib_path, gt_pose_path);
+
+  // case 1: load config file
+  o.loadCheckThres(cand_score_config);
+
+//  // case 2: manually set
+//  CandidateScoreEnsemble thres_lb, thres_ub;
+//  // a.1 constellation similarity
+//  thres_lb.sim_constell.i_ovlp_sum = 5;
+//  thres_ub.sim_constell.i_ovlp_sum = 10;
+//
+//  thres_lb.sim_constell.i_ovlp_max_one = 4;
+//  thres_ub.sim_constell.i_ovlp_max_one = 6;
+//
+//  thres_lb.sim_constell.i_in_ang_rng = 4;
+//  thres_ub.sim_constell.i_in_ang_rng = 6;
+//
+//  // a.2 pairwise similarity
+//  thres_lb.sim_pair.i_indiv_sim = 4;
+//  thres_ub.sim_pair.i_indiv_sim = 6;
+//
+//  thres_lb.sim_pair.i_orie_sim = 4;
+//  thres_ub.sim_pair.i_orie_sim = 6;
+//
+//  thres_lb.sim_pair.f_area_perc = 5; // 0.05;
+//  thres_ub.sim_pair.f_area_perc = 10; // 0.15;
+//
+//  // a.3 correlation
+//  thres_lb.correlation = 0.65;
+//  thres_ub.correlation = 0.75;
+//
+//  thres_lb.area_perc = 0.05;
+//  thres_ub.area_perc = 0.10;
+//  o.setCheckThres(thres_lb, thres_ub);
 
   ros::Rate rate(50);
   int cnt = 0;

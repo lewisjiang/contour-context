@@ -106,7 +106,7 @@ struct ContourManagerConfig {
 };
 
 const int16_t BITS_PER_LAYER = 64;
-const int8_t DIST_BIN_LAYERS[] = {1, 2, 3, 4};  // the layers for generating the dist key
+const int8_t DIST_BIN_LAYERS[] = {1, 2, 3, 4};  // the layers for generating the dist key and forming the constellation
 const float LAYER_AREA_WEIGHTS[] = {0.3, 0.3, 0.3,
                                     0.1};  // weights for each layer when calculating a normalized "used area percentage"
 const int16_t NUM_BIN_KEY_LAYER = sizeof(DIST_BIN_LAYERS) / sizeof(int8_t);
@@ -118,15 +118,19 @@ union ScoreConstellSim {
   enum {
     SizeAtCompileTime = 3
   };
-  int data[3]{};
+  int data[SizeAtCompileTime]{};
   struct {
     int i_ovlp_sum;
     int i_ovlp_max_one;
     int i_in_ang_rng;
   };
 
-  inline int i_overall() const {
+  inline const int &overall() const {
     // Manually select a thres in the check as the score for the overall check to pass.
+    return i_in_ang_rng;
+  }
+
+  inline int cnt() const {
     return i_in_ang_rng;
   }
 
@@ -145,25 +149,63 @@ union ScoreConstellSim {
 
 union ScorePairwiseSim {
   enum {
-    SizeAtCompileTime = 3
+    SizeAtCompileTime = 2
   };
-  int data[3]{};
+  int data[SizeAtCompileTime]{};
   struct {
     int i_indiv_sim;
     int i_orie_sim;
-    int f_area_perc;  // the area score is a weighted sum of used area percentage of all concerning levels, normalized to int(100)
+//    int f_area_perc;  // the area score is a weighted sum of used area percentage of all concerning levels, normalized to int(100)
   };
 
-  inline int i_overall() const {
+  inline const int &overall() const {
     // Manually select a thres in the check as the min requirement for the overall check to pass.
+    return i_orie_sim;
+//    return f_area_perc;  // which has the final say?
+  }
+
+  inline int cnt() const {
     return i_orie_sim;
   }
 
   void print() const {
-    printf("%d, %d, %d%%;", i_indiv_sim, i_orie_sim, f_area_perc);
+    printf("%d, %d;", i_indiv_sim, i_orie_sim);
   }
 
   bool strictSmaller(const ScorePairwiseSim &b) const {
+    for (int i = 0; i < SizeAtCompileTime; i++) {
+      if (data[i] >= b.data[i])
+        return false;
+    }
+    return true;
+  }
+};
+
+union ScorePostProc {
+  enum {
+    SizeAtCompileTime = 3
+  };
+  float data[SizeAtCompileTime]{};
+
+  struct {
+    float correlation;
+    float area_perc;
+    float neg_est_dist;  // 2D trans distance. Record as the negated distance (since the larger the better)
+  };
+
+  inline const float &overall() const {
+    return correlation;
+  }
+
+//  inline int cnt() const {
+//    return 0;
+//  }
+
+  void print() const {
+    printf("%6f, %6f%%, %6fm;", correlation, 100 * area_perc, neg_est_dist);
+  }
+
+  bool strictSmaller(const ScorePostProc &b) const {
     for (int i = 0; i < SizeAtCompileTime; i++) {
       if (data[i] >= b.data[i])
         return false;
@@ -693,7 +735,7 @@ public:
 //              }
 
               // case 2: gmm, normalized
-              if (dist < roi_radius - 1e-2 && bev_(rr, cc) > cfg_.lv_grads_[ll]) {
+              if (dist < roi_radius - 1e-2 && bev_(rr, cc) > cfg_.lv_grads_[DIST_BIN_LAYERS[0]]) { // imprv key variance
                 int higher_cnt = 1; // number of levels spanned by this pixel
                 for (int ele = ll + 1; ele < cfg_.lv_grads_.size(); ele++)
                   if (bev_(rr, cc) > cfg_.lv_grads_[ele])
@@ -745,6 +787,7 @@ public:
 
 
           // case 1,2:
+          DCHECK_EQ(num_bins + 3, RET_KEY_DIM);
           for (int nb = 0; nb < num_bins; nb++) {
 //            key(3 + nb) = ring_bins[nb];
 //            key(3 + nb) = ring_bins[nb] / (M_PI * (2 * nb + 1) * bin_len);  // density on the ring
@@ -1022,25 +1065,30 @@ public:
     return cfg_;
   }
 
+  inline const float &getAreaPerc(const int8_t &lev, const int8_t &seq) const {
+    return cont_perc_[lev][seq];
+  }
+
   // TODO: check if contours in two scans can be accepted as from the same heatmap, and return the transform
   // TODO: when retrieval key contains the combination, we should only look into that combination.
   // T_tgt = T_delta * T_src
   static std::pair<Eigen::Isometry2d, bool> calcScanCorresp(const ContourManager &src, const ContourManager &tgt);
 
   // T_tgt = T_delta * T_src
-  /// Check the similarity of each pair of stars(contours) in the constellation
+  /// Check the similarity of each pair of stars(contours) in the constellation.
+  /// Note: check the size lb outside or check the size of `area_perc` to ensure the prediction is Positive
   /// \param src
   /// \param tgt
-  /// \param levels
-  /// \param ids_src The indices of the matched contours at \param{levels}, one on one correspondence with ids_tgt
-  /// \param ids_tgt
-  /// \param sim_idx if return true, this contains the index of ids_{src|tgt} survived pairwise similarity check. Values
-  ///     taken from [0, ids_tgt.size()).
-  /// \return the number of matched...
+  /// \param cstl_in
+  /// \param lb
+  /// \param cstl_out The filtered constellation
+  /// \param area_perc The accompanying area percentage of each pair (at the level specified by the constell pair)
+  /// \return
   static ScorePairwiseSim checkConstellCorrespSim(const ContourManager &src, const ContourManager &tgt,
                                                   const std::vector<ConstellationPair> &cstl_in,
                                                   const ScorePairwiseSim &lb,
-                                                  std::vector<ConstellationPair> &cstl_out) {
+                                                  std::vector<ConstellationPair> &cstl_out,
+                                                  std::vector<float> &area_perc) {
     // cross level consensus (CLC)
     // The rough constellation should have been established.
     DCHECK_EQ(src.cont_views_.size(), tgt.cont_views_.size());
@@ -1051,6 +1099,7 @@ public:
     std::map<int, std::pair<float, float>> lev_frac;  // {lev:[src, tgt], }
 
     cstl_out.clear();
+    area_perc.clear();
     // 1. check individual sim
     printf("check individual sim of the constellation:\n");
     for (auto pr: cstl_in) {
@@ -1113,30 +1162,37 @@ public:
       return ret;  // TODO: use cross level consensus to find more possible matched pairs
 
     std::sort(cstl_out.begin(), cstl_out.end());  // human readability
-
     printf("Found matched pairs:\n");
     for (const auto &i: cstl_out) {
       printf("\tlev %d, src:tgt  %d: %d\n", i.level, i.seq_src, i.seq_tgt);
     }
 
-    // get the percentage of points used in match v. total area of each level.
-    std::vector<float> level_perc_used_src(src.cfg_.lv_grads_.size(), 0);
-    std::vector<float> level_perc_used_tgt(tgt.cfg_.lv_grads_.size(), 0);
+    // get the percentage of each of the nodes in the constellation
+    area_perc.reserve(cstl_out.size());
     for (const auto &i: cstl_out) {
-      level_perc_used_src[i.level] += src.cont_perc_[i.level][i.seq_src];
-      level_perc_used_tgt[i.level] += tgt.cont_perc_[i.level][i.seq_tgt];
-    }
-    printf("Percentage used in constellation:\n");
-    for (int i = 0; i < src.cfg_.lv_grads_.size(); i++) {
-      printf("lev: %d, src: %4.2f, tgt: %4.2f\n", i, level_perc_used_src[i], level_perc_used_tgt[i]);
+      area_perc.push_back(0.5f * (src.cont_perc_[i.level][i.seq_src] + tgt.cont_perc_[i.level][i.seq_tgt]));
     }
 
-    float perc = 0;
-    for (int i = 0; i < NUM_BIN_KEY_LAYER; i++) {
-      perc += LAYER_AREA_WEIGHTS[i] *
-              (level_perc_used_src[DIST_BIN_LAYERS[i]] + level_perc_used_tgt[DIST_BIN_LAYERS[i]]) / 2;
-    }
-    ret.f_area_perc = int(perc * 100);
+
+    // get the percentage of points used in match v. total area of each level.
+//    std::vector<float> level_perc_used_src(src.cfg_.lv_grads_.size(), 0);
+//    std::vector<float> level_perc_used_tgt(tgt.cfg_.lv_grads_.size(), 0);
+//    for (const auto &i: cstl_out) {
+//      level_perc_used_src[i.level] += src.cont_perc_[i.level][i.seq_src];
+//      level_perc_used_tgt[i.level] += tgt.cont_perc_[i.level][i.seq_tgt];
+//    }
+//    printf("Percentage used in the proposed constellation:\n");
+//    for (int i = 0; i < src.cfg_.lv_grads_.size(); i++) {
+//      printf("lev: %d, src: %4.2f, tgt: %4.2f\n", i, level_perc_used_src[i], level_perc_used_tgt[i]);
+//    }
+
+    // the percentage score in s a single float (deprecated)
+//    float perc = 0;
+//    for (int i = 0; i < NUM_BIN_KEY_LAYER; i++) {
+//      perc += LAYER_AREA_WEIGHTS[i] *
+//              (level_perc_used_src[DIST_BIN_LAYERS[i]] + level_perc_used_tgt[DIST_BIN_LAYERS[i]]) / 2;
+//    }
+//    ret.f_area_perc = int(perc * 100);
 
     return ret;
 

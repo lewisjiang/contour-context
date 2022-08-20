@@ -238,7 +238,9 @@ struct LayerDB {
 struct CandidateScoreEnsemble {
   ScoreConstellSim sim_constell;
   ScorePairwiseSim sim_pair;
-  float correlation = 0;
+  ScorePostProc sim_post;
+//  float correlation = 0;
+//  float area_perc = 0;
 };
 
 
@@ -257,10 +259,11 @@ struct CandidateManager {
   // It is possible that multiple key/bci matches (pass the checks with different TF) correspond to the same pose, so
   // we record the potential proposals and find the most likely one after checking all the candidates.
   struct CandidateAnchorProp {
-    std::set<ConstellationPair> constell_;  // set of constellation matches
+    std::map<ConstellationPair, float> constell_;  // map of {constellation matches: percentage score}
     Eigen::Isometry2d T_delta_;  // the key feature that distinguishes different proposals
     float correlation_ = 0;
     int vote_cnt_ = 0;  // cnt of matched contours voting for this TF (not cnt of unique pairs)
+    float area_perc_ = 0;  // a weighted sum of the area % of used contours in all the contours at different levels.
     // TODO: should we record area percentage as the metric for "votes"?
   };
 
@@ -270,16 +273,22 @@ struct CandidateManager {
     std::unique_ptr<ConstellCorrelation> corr_est_;  // generate the correlation estimator after polling all the cands
     std::vector<CandidateAnchorProp> anch_props_;
 
-    // add a anchor proposal, either merge or create new in `anch_props_`
-    void addProposal(const Eigen::Isometry2d &T_prop, const std::vector<ConstellationPair> &sim_pairs) {
+    /// add a anchor proposal, either merge or create new in `anch_props_`
+    /// \param T_prop
+    /// \param sim_pairs
+    /// \param sim_area_perc The level percentage score of a corresponding constellation
+    void addProposal(const Eigen::Isometry2d &T_prop, const std::vector<ConstellationPair> &sim_pairs,
+                     const std::vector<float> &sim_area_perc) {
       DCHECK_GT(sim_pairs.size(), 3);  // hard bottom line
+      DCHECK_EQ(sim_pairs.size(), sim_area_perc.size());
 
       for (int i = 0; i < anch_props_.size(); i++) {
         const Eigen::Isometry2d delta_T = T_prop.inverse() * anch_props_[i].T_delta_;
         // hardcoded threshold: 2.0m, 0.3.rad
         if (delta_T.translation().norm() < 2.0 && std::abs(std::atan2(delta_T(1, 0), delta_T(0, 0))) < 0.3) {
-          for (const auto &pr: sim_pairs)
-            anch_props_[i].constell_.insert(pr);  // unique
+          for (int j = 0; j < sim_pairs.size(); j++) {
+            anch_props_[i].constell_.insert({sim_pairs[j], sim_area_perc[j]});  // unique
+          }
 
           anch_props_[i].vote_cnt_ += sim_pairs.size();  // not unique
           // TODO: Do we need the `CandSimScore` object?
@@ -314,8 +323,9 @@ struct CandidateManager {
       // empty set or no similar proposal
       anch_props_.emplace_back();
       anch_props_.back().T_delta_ = T_prop;
-      for (const auto &pr: sim_pairs)
-        anch_props_.back().constell_.insert(pr);
+      for (int j = 0; j < sim_pairs.size(); j++) {
+        anch_props_.back().constell_.insert({sim_pairs[j], sim_area_perc[j]});  // unique
+      }
       anch_props_.back().vote_cnt_ = sim_pairs.size();
 //      anch_props_.back().sim_score_.cnt_pairwise_sim_ = sim_pairs.size();
 
@@ -356,7 +366,7 @@ struct CandidateManager {
     // TO-DO: pass in sim score lb and ub as params
     CHECK(sim_lb.sim_constell.strictSmaller(sim_ub.sim_constell));
     CHECK(sim_lb.sim_pair.strictSmaller(sim_ub.sim_pair));
-    CHECK(sim_lb.correlation < sim_ub.correlation);
+    CHECK(sim_lb.sim_post.strictSmaller(sim_ub.sim_post));
   }
 
   /// Main func 1/3: check possible anchor pairing and add to the database
@@ -394,17 +404,19 @@ struct CandidateManager {
                                                               cm_tgt_->getBCI(anchor_pair.level, anchor_pair.seq_tgt),
                                                               sim_var_.sim_constell, tmp_pairs1);
     ret_score.sim_constell = ret_constell_sim;
-    if (ret_constell_sim.i_overall() < sim_var_.sim_constell.i_overall())
+    if (ret_constell_sim.overall() < sim_var_.sim_constell.overall())
       return ret_score;
 //    curr_score.cnt_constell_ = ret_constell_sim;
     cand_aft_check2++;
 
     // check (3/4): individual similarity check
     std::vector<ConstellationPair> tmp_pairs2;
+    std::vector<float> tmp_area_perc;
     ScorePairwiseSim ret_pairwise_sim = ContourManager::checkConstellCorrespSim(*cm_cand, *cm_tgt_, tmp_pairs1,
-                                                                                sim_var_.sim_pair, tmp_pairs2);
+                                                                                sim_var_.sim_pair, tmp_pairs2,
+                                                                                tmp_area_perc);
     ret_score.sim_pair = ret_pairwise_sim;
-    if (ret_pairwise_sim.i_overall() < sim_var_.sim_pair.i_overall())
+    if (ret_pairwise_sim.overall() < sim_var_.sim_pair.overall())
       return ret_score;
 //    curr_score.cnt_pairwise_sim_ = ret_pairwise_sim;
     cand_aft_check3++;
@@ -424,7 +436,7 @@ struct CandidateManager {
 
     // Now we assume the pair has passed all the tests. We will add the results to the candidate data structure
     // 2. Update the dynamic score thresholds for different
-    const int cnt_curr_valid = ret_pairwise_sim.i_overall();  // the count of pairs for this positive match
+    const int cnt_curr_valid = ret_pairwise_sim.cnt();  // the count of pairs for this positive match
     // 2.1 constell sim
     auto new_const_lb = sim_var_.sim_constell;
     new_const_lb.i_ovlp_sum = cnt_curr_valid;
@@ -437,7 +449,7 @@ struct CandidateManager {
     auto new_pair_lb = sim_var_.sim_pair;
     new_pair_lb.i_indiv_sim = cnt_curr_valid;
     new_pair_lb.i_orie_sim = cnt_curr_valid;
-    new_pair_lb.f_area_perc = ret_pairwise_sim.f_area_perc;
+//    new_pair_lb.f_area_perc = ret_pairwise_sim.f_area_perc;
     alignLB<ScorePairwiseSim>(new_pair_lb, sim_var_.sim_pair);
     alignUB<ScorePairwiseSim>(sim_ub_.sim_pair, sim_var_.sim_pair);
 
@@ -453,12 +465,12 @@ struct CandidateManager {
     auto cand_it = cand_id_pos_pair_.find(cand_id);
     if (cand_it != cand_id_pos_pair_.end()) {
       // the candidate pose exists
-      candidates_[cand_it->second].addProposal(T_pass, tmp_pairs2);
+      candidates_[cand_it->second].addProposal(T_pass, tmp_pairs2, tmp_area_perc);
     } else {
       // add new
       CandidatePoseData new_cand;
       new_cand.cm_cand_ = cm_cand;
-      new_cand.addProposal(T_pass, tmp_pairs2);
+      new_cand.addProposal(T_pass, tmp_pairs2, tmp_area_perc);
       cand_id_pos_pair_.insert({cand_id, candidates_.size()});
       candidates_.emplace_back(std::move(new_cand));
     }
@@ -486,13 +498,49 @@ struct CandidateManager {
       DCHECK(!candidate.anch_props_.empty());
       // find the best T_init for setting up correlation problem estimation (based on vote)
       int idx_sel = 0;
-      for (int i = 1; i < candidate.anch_props_.size(); i++) {  // TODO: should we use vote count or area?
+      for (int i = 0; i < candidate.anch_props_.size(); i++) {  // TODO: should we use vote count or area?
+
+        // get the percentage of points used in match v. total area of each level.
+        std::vector<float> lev_perc(cm_tgt_->getConfig().lv_grads_.size(), 0);
+        for (const auto &pr: candidate.anch_props_[i].constell_) {
+          lev_perc[pr.first.level] += pr.second;
+//          level_perc_used_src[pr.level] += cm_src->getAreaPerc(pr.level, pr.seq_src);
+//          level_perc_used_tgt[pr.level] += cm_tgt_->getAreaPerc(pr.level, pr.seq_tgt);
+        }
+
+        float perc = 0;
+        for (int j = 0; j < NUM_BIN_KEY_LAYER; j++)
+//          perc += LAYER_AREA_WEIGHTS[j] * (0 + 2 * level_perc_used_tgt[DIST_BIN_LAYERS[j]]) / 2;
+          perc += LAYER_AREA_WEIGHTS[j] * lev_perc[DIST_BIN_LAYERS[j]];
+
+        candidate.anch_props_[i].area_perc_ = perc;
+
         if (candidate.anch_props_[i].vote_cnt_ > candidate.anch_props_[idx_sel].vote_cnt_)
           idx_sel = i;
       }
       // put the best prop to the first and leave the rest as they are
       std::swap(candidate.anch_props_[0], candidate.anch_props_[idx_sel]);
 
+      // Overall test 1: area percentage score
+      printf("Cand id:%d, area perc: %f @max# %d votes\n", candidate.cm_cand_->getIntID(),
+             candidate.anch_props_[0].area_perc_, candidate.anch_props_[0].vote_cnt_);
+      if (candidate.anch_props_[0].area_perc_ < sim_var_.sim_post.area_perc) { // check (1/3): area score.
+        printf("Low area skipped: %6f < %6f\n", candidate.anch_props_[0].area_perc_, sim_var_.sim_post.area_perc);
+        cnt_to_rm++;
+        continue;
+      }
+
+      // Overall test 2: Censor distance. NOTE: The negate!! Larger is better
+      double neg_est_trans_norm2d = -ConstellCorrelation::getEstSensTF(candidate.anch_props_[0].T_delta_,
+                                                                       cm_tgt_->getConfig()).translation().norm();
+      if (neg_est_trans_norm2d < sim_var_.sim_post.neg_est_dist) { // check (2/3): area score.
+        printf("Low dist skipped: %6f < %6f\n", neg_est_trans_norm2d, sim_var_.sim_post.neg_est_dist);
+        cnt_to_rm++;
+        continue;
+      }
+
+
+      // Overall test 3: correlation score
       // set up the correlation optimization problem for each candidate pose
       std::unique_ptr<ConstellCorrelation> corr_est(new ConstellCorrelation(gmm_config));
       auto corr_score_init = (float) corr_est->initProblem(*(candidate.cm_cand_), *cm_tgt_,
@@ -501,19 +549,28 @@ struct CandidateManager {
       printf("Cand id:%d, init corr: %f @max# %d votes\n", candidate.cm_cand_->getIntID(), corr_score_init,
              candidate.anch_props_[0].vote_cnt_);
 
-
       // TODO: find the best T_best for optimization init guess (based on problem->Evaluate())
       // Is it necessary?
 
-
-      if (corr_score_init < sim_var_.correlation) { // check (4/4): correlation score.
-        printf("Low corr skipped: %6f < %6f\n", corr_score_init, sim_var_.correlation);
+      if (corr_score_init < sim_var_.sim_post.correlation) { // check (3/3): correlation score.
+        printf("Low corr skipped: %6f < %6f\n", corr_score_init, sim_var_.sim_post.correlation);
         cnt_to_rm++;
         continue;
       }
 
-      sim_var_.correlation = corr_score_init;
-      sim_var_.correlation = sim_var_.correlation > sim_ub_.correlation ? sim_ub_.correlation : sim_var_.correlation;
+      // passes the test, update the thres variable, and update data structure info
+      auto new_post_lb = sim_var_.sim_post;
+      new_post_lb.correlation = corr_score_init;
+      new_post_lb.area_perc = candidate.anch_props_[0].area_perc_;
+      new_post_lb.neg_est_dist = neg_est_trans_norm2d;
+      alignLB<ScorePostProc>(new_post_lb, sim_var_.sim_post);
+      alignUB<ScorePostProc>(sim_ub_.sim_post, sim_var_.sim_post);
+
+//      sim_var_.area_perc = candidate.anch_props_[0].area_perc_;  // right must ge left
+//      sim_var_.area_perc = sim_var_.area_perc > sim_ub_.area_perc ? sim_ub_.area_perc : sim_var_.area_perc;
+//
+//      sim_var_.correlation = corr_score_init;
+//      sim_var_.correlation = sim_var_.correlation > sim_ub_.correlation ? sim_ub_.correlation : sim_var_.correlation;
 
 //      candidate.anch_props_[0].sim_score_.correlation_ = corr_score_init;
       candidate.anch_props_[0].correlation_ = corr_score_init;
@@ -610,7 +667,7 @@ struct ContourDBConfig {
 // top level database
 class ContourDB {
   const ContourDBConfig cfg_;
-  const std::vector<int> q_levels_;
+  const std::vector<int> q_levels_;  // the layers to generate anchors (Note the difference between `DIST_BIN_LAYERS`)
 
   std::vector<LayerDB> layer_db_;
   std::vector<std::shared_ptr<const ContourManager>> all_bevs_;
