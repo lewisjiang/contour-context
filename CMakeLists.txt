@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(cont2)
 
-#set(CMAKE_BUILD_TYPE "Release")
+set(CMAKE_BUILD_TYPE "Release")
 
-set(CMAKE_BUILD_TYPE "Debug")
+#set(CMAKE_BUILD_TYPE "Debug")
 # Enable debug flags (use if you want to debug in gdb)
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g3 -Wall")
 
@@ -85,6 +85,9 @@ target_link_libraries(${PROJECT_NAME}contops
 ### 0. rosbag play test of the project
 add_executable(${PROJECT_NAME}_bag_play_test
         src/test/bag_play_test.cpp
+        src/cont2_ros/io_ros.cpp
+        src/cont2_ros/spinner_ros.cpp
+        src/eval/evaluator.cpp
         )
 target_link_libraries(${PROJECT_NAME}_bag_play_test
         ${PROJECT_NAME}contops
@@ -125,6 +128,20 @@ target_link_libraries(${PROJECT_NAME}_kitti_bin_test
         ${catkin_LIBRARIES}
         ${PCL_LIBRARIES}
         ${CERES_LIBRARIES}
+        ${OpenCV_LIBS}
+        )
+
+### 2. read and operate on bins (script formatted input) and display in ros
+add_executable(${PROJECT_NAME}_batch_bin_test
+        src/test/batch_bin_test.cpp
+        src/cont2_ros/spinner_ros.cpp
+        src/eval/evaluator.cpp
+        )
+target_link_libraries(${PROJECT_NAME}_batch_bin_test
+        ${PROJECT_NAME}contops
+        ${glog_LIBRARIES}
+        ${catkin_LIBRARIES}
+        ${PCL_LIBRARIES}
         ${OpenCV_LIBS}
         )
 

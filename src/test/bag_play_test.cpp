@@ -4,6 +4,8 @@
 #include "cont2/contour_mng.h"
 #include "cont2_ros/io_ros.h"
 #include "cont2/contour_db.h"
+#include "eval/evaluator.h"
+#include "cont2_ros/spinner_ros.h"
 
 #include <nav_msgs/Path.h>
 #include <visualization_msgs/MarkerArray.h>
@@ -17,59 +19,26 @@
 
 const std::string PROJ_DIR = std::string(PJSRCDIR);
 
-template<int dim>
-struct SimpleRMSE {
-  double sum_sqs = 0;
-  double sum_abs = 0;
-  int cnt_sqs = 0;
 
-  SimpleRMSE() = default;
-
-  void addOneErr(const double *d) {
-    cnt_sqs++;
-    double tmp = 0;
-    for (int i = 0; i < dim; i++) {
-      tmp += d[i] * d[i];
-    }
-    sum_sqs += tmp;
-    sum_abs += std::sqrt(tmp);
-  }
-
-  double getRMSE() const {
-    return std::sqrt(sum_sqs / cnt_sqs);
-  }
-
-  double getMean() const {
-    return sum_abs / cnt_sqs;
-  }
-};
-
-class RosBagPlayLoopTest {
-  struct GlobalPoseInfo {
-    Eigen::Isometry3d T_wl;
-    double z_shift{};
-
-    GlobalPoseInfo(const Eigen::Isometry3d &a, const double &b) : T_wl(a), z_shift(b) {}
-
-    GlobalPoseInfo() {}
-  };
+class RosBagPlayLoopTest : public BaseROSSpinner {
 
   // ros stuff
-  ros::NodeHandle nh;
-  ros::Publisher pub_path;
-  ros::Publisher pub_lc_connections;
-  ros::Publisher pub_pose_idx;
-  nav_msgs::Path path_msg;
-  visualization_msgs::MarkerArray line_array;
-  visualization_msgs::MarkerArray idx_text_array;
-  tf2_ros::Buffer tfBuffer;
-  tf2_ros::TransformListener tfListener;
+//  ros::NodeHandle nh;
+//  ros::Publisher pub_path;
+//  ros::Publisher pub_lc_connections;
+//  ros::Publisher pub_pose_idx;
+//  nav_msgs::Path path_msg;
+//  visualization_msgs::MarkerArray line_array;
+//  visualization_msgs::MarkerArray idx_text_array;
+//  tf2_ros::Buffer tfBuffer;
+//  tf2_ros::TransformListener tfListener;
+//
+//  // The data used for general purpose (w/o gt files, etc.) in the work flow
+//  std::map<int, GlobalPoseInfo> g_poses;
 
-//  std::vector<std::shared_ptr<ContourManager>> scans;
+  // --- Added members for evaluation and LC module running ---
+  //  std::vector<std::shared_ptr<ContourManager>> scans;
   ContourDB contour_db;
-
-  // The data used for general purpose (w/o gt files, etc.) in the work flow
-  std::map<int, GlobalPoseInfo> g_poses;
 
   // The raw data read from extra content of the dataset
   std::vector<double> all_raw_time_stamps;
@@ -83,7 +52,6 @@ class RosBagPlayLoopTest {
 
   CandidateScoreEnsemble thres_lb_, thres_ub_;  // check thresholds
 
-  int lc_cnt{};
   int lc_tp_pose_cnt{}, lc_fn_pose_cnt{}, lc_fp_pose_cnt{};
   SimpleRMSE<2> trans_rmse;
   SimpleRMSE<1> rot_rmse;
@@ -95,15 +63,12 @@ class RosBagPlayLoopTest {
 
 public:
   explicit RosBagPlayLoopTest(ros::NodeHandle &nh_, int idx_beg, int idx_end,
-                              uint64_t t_seq_beg_ns = 12345) : nh(nh_), seq_beg(idx_beg), seq_end(idx_end),
+                              uint64_t t_seq_beg_ns = 12345) : BaseROSSpinner(nh_), //nh(nh_),
+                                                               seq_beg(idx_beg), seq_end(idx_end),
                                                                ros_io(0, "/velodyne_points", nh_, t_seq_beg_ns),
-                                                               tfListener(tfBuffer),
+      // tfListener(tfBuffer),
                                                                contour_db(ContourDBConfig(),
                                                                           std::vector<int>({1, 2, 3})) {
-    path_msg.header.frame_id = "world";
-    pub_path = nh_.advertise<nav_msgs::Path>("/gt_path", 10000);
-    pub_pose_idx = nh_.advertise<visualization_msgs::MarkerArray>("/pose_index", 10000);
-    pub_lc_connections = nh_.advertise<visualization_msgs::MarkerArray>("/lc_connect", 10000);
 
     T_lc_velod_.setIdentity();
   }
@@ -197,7 +162,9 @@ public:
       tmp_T_lc0_lc.rotate(tmp_rot_q);
       tmp_T_lc0_lc.pretranslate(tmp_trans);
 
-      all_raw_gt_l_poses.emplace_back(T_w_lc0 * tmp_T_lc0_lc * T_lc_velod_);
+//      all_raw_gt_l_poses.emplace_back(T_w_lc0 * tmp_T_lc0_lc * T_lc_velod_);
+      // The first lidar pose is the world frame:
+      all_raw_gt_l_poses.emplace_back(T_lc_velod_.inverse() * tmp_T_lc0_lc * T_lc_velod_);
 //      all_raw_gt_l_poses.emplace_back(tmp_T_lc0_lc);
 
     }
@@ -213,70 +180,16 @@ public:
   // call before spin 3/3
   // load check thres
   void loadCheckThres(const std::string &fpath) {
-    std::fstream infile;
-    infile.open(fpath, std::ios::in);
-
-    if (infile.rdstate() != std::ifstream::goodbit) {
-      std::cerr << "Error opening thres config file: " << fpath << std::endl;
-      return;
-    }
-
-    std::string sbuf, pname;
-    while (std::getline(infile, sbuf)) {
-      std::istringstream iss(sbuf);
-      if (iss >> pname) {
-        std::cout << pname << std::endl;
-        if (pname[0] == '#')
-          continue;
-        if (pname == "i_ovlp_sum") {
-          iss >> thres_lb_.sim_constell.i_ovlp_sum;
-          iss >> thres_ub_.sim_constell.i_ovlp_sum;
-        } else if (pname == "i_ovlp_max_one") {
-          iss >> thres_lb_.sim_constell.i_ovlp_max_one;
-          iss >> thres_ub_.sim_constell.i_ovlp_max_one;
-        } else if (pname == "i_in_ang_rng") {
-          iss >> thres_lb_.sim_constell.i_in_ang_rng;
-          iss >> thres_ub_.sim_constell.i_in_ang_rng;
-        } else if (pname == "i_indiv_sim") {
-          iss >> thres_lb_.sim_pair.i_indiv_sim;
-          iss >> thres_ub_.sim_pair.i_indiv_sim;
-        } else if (pname == "i_orie_sim") {
-          iss >> thres_lb_.sim_pair.i_orie_sim;
-          iss >> thres_ub_.sim_pair.i_orie_sim;
-//        } else if (pname == "f_area_perc") {
-//          iss >> thres_lb_.sim_pair.f_area_perc;
-//          iss >> thres_ub_.sim_pair.f_area_perc;
-//        } else if (pname == "correlation") {
-//          iss >> thres_lb_.correlation;
-//          iss >> thres_ub_.correlation;
-//        } else if (pname == "area_perc") {
-//          iss >> thres_lb_.area_perc;
-//          iss >> thres_ub_.area_perc;
-//        }
-
-        } else if (pname == "correlation") {
-          iss >> thres_lb_.sim_post.correlation;
-          iss >> thres_ub_.sim_post.correlation;
-        } else if (pname == "area_perc") {
-          iss >> thres_lb_.sim_post.area_perc;
-          iss >> thres_ub_.sim_post.area_perc;
-        } else if (pname == "neg_est_dist") {
-          iss >> thres_lb_.sim_post.neg_est_dist;
-          iss >> thres_ub_.sim_post.neg_est_dist;
-        }
-      }
-    }
-
-    infile.close();
+    ContLCDEvaluator::loadCheckThres(fpath, thres_lb_, thres_ub_);
   }
 
   // spin
   void processOnce(int &cnt) {
 
     pcl::PointCloud<pcl::PointXYZ>::ConstPtr out_ptr = nullptr;
-    geometry_msgs::TransformStamped tf_gt_last;
+    geometry_msgs::TransformStamped tf_gt_curr;
 //    out_ptr = ros_io.getLidarPointCloud();
-    out_ptr = ros_io.getLidarPointCloud(tf_gt_last);
+    out_ptr = ros_io.getLidarPointCloud(tf_gt_curr);
     if (!out_ptr)
       return;
 
@@ -287,7 +200,8 @@ public:
       time_beg_set = true;
     }
 
-    int scan_seq = lookupTs(time.toSec());
+    int scan_seq = lookupNN<double>(time.toSec(), all_raw_time_stamps, 1e-3);
+    CHECK_GT(scan_seq, -1);
     if (scan_seq < seq_beg || scan_seq > seq_end) {
       printf("Index %d out of range [%d, %d].\n", scan_seq, seq_beg, seq_end);
       return;
@@ -299,31 +213,27 @@ public:
     int curr_id = scan_seq;
 
     // case 1: use gps-imu data as pose (comment the line below)
-    tf_gt_last = tf2::eigenToTransform(all_raw_gt_l_poses[scan_seq - seq_beg]); // case 2: use dataset sequence gt
+    tf_gt_curr = tf2::eigenToTransform(all_raw_gt_l_poses[scan_seq - seq_beg]); // case 2: use dataset sequence gt
 
     printf("---\nour counted seq: %d, kitti seq: %d, curr_id: %d, stamp: %lu\n", cnt, scan_seq, curr_id, time.toNSec());
 
-    static tf2_ros::TransformBroadcaster br;
-    tf_gt_last.header.stamp = ros::Time::now();
-    tf_gt_last.header.frame_id = "world";
-    tf_gt_last.child_frame_id = "gt_curr";
-    br.sendTransform(tf_gt_last);
+    broadcastCurrPose(tf_gt_curr);
 
-    std::cout << "trans z: " << tf_gt_last.transform.translation.z << std::endl;
+    std::cout << "trans z: " << tf_gt_curr.transform.translation.z << std::endl;
 
-    Eigen::Isometry3d T_gt_last; // velodyne to world transform
-    T_gt_last = tf2::transformToEigen(tf_gt_last); // use looked up tf
+    Eigen::Isometry3d T_gt_curr; // velodyne to world transform
+    T_gt_curr = tf2::transformToEigen(tf_gt_curr); // use looked up tf
 
     Eigen::Vector3d time_translate(0, 0, 1);
     time_translate = time_translate * (time.toSec() - time_beg.toSec()) / 60;   // elevate 1m per minute
 
-    g_poses.insert(std::make_pair(curr_id, GlobalPoseInfo(T_gt_last, time_translate.z())));
-//    gt_poses.emplace_back(T_gt_last);
+    g_poses.insert(std::make_pair(curr_id, GlobalPoseInfo(T_gt_curr, time_translate.z())));
+//    gt_poses.emplace_back(T_gt_curr);
 //    poses_time_z_shift.emplace_back(time_translate.z());
 
-    tf_gt_last.transform.translation.z += time_translate.z();// elevate 1m per minute
-    publishPath(time, tf_gt_last);
-    publishScanSeqText(time, tf_gt_last, scan_seq);
+    tf_gt_curr.transform.translation.z += time_translate.z();// elevate 1m per minute
+    publishPath(time, tf_gt_curr);
+    publishScanSeqText(time, tf_gt_curr, scan_seq);
 
 
     std::vector<std::pair<int, int>> new_lc_pairs;
@@ -430,106 +340,6 @@ public:
     printf("Accumulated fn poses: %d\n", lc_fn_pose_cnt);
     printf("Accumulated fp poses: %d\n", lc_fp_pose_cnt);
 
-  }
-
-  // given the ts, find the sequence id of the nearest ts
-  int lookupTs(double ts_query, double tol = 1e-3) const {
-    auto it_low = std::lower_bound(all_raw_time_stamps.begin(), all_raw_time_stamps.end(), ts_query);
-    auto it = it_low;
-    if (it_low == all_raw_time_stamps.begin()) {
-      it = it_low;
-    } else if (it_low == all_raw_time_stamps.end()) {
-      it = it_low - 1;
-    } else {
-      it = std::abs(ts_query - *it_low) < std::abs(ts_query - *(it_low - 1)) ?
-           it_low : it_low - 1;
-    }
-    CHECK(std::abs(*it - ts_query) < tol);
-    return it_low - all_raw_time_stamps.begin();
-  }
-
-  void publishPath(ros::Time time, const geometry_msgs::TransformStamped &tf_gt_last) {
-    path_msg.header.stamp = time;
-    geometry_msgs::PoseStamped ps;
-    ps.pose.orientation = tf_gt_last.transform.rotation;
-    ps.pose.position.x = tf_gt_last.transform.translation.x;
-    ps.pose.position.y = tf_gt_last.transform.translation.y;
-    ps.pose.position.z = tf_gt_last.transform.translation.z;
-    ps.header = path_msg.header;
-    path_msg.poses.emplace_back(ps);
-    pub_path.publish(path_msg);
-  }
-
-  void publishScanSeqText(ros::Time time, const geometry_msgs::TransformStamped &tf_gt_last, int seq) {
-    // index
-    visualization_msgs::Marker marker;
-    marker.header.frame_id = "world";
-    marker.header.stamp = time;
-    marker.ns = "myns";
-    marker.id = seq;
-
-    marker.action = visualization_msgs::Marker::ADD;
-    marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
-
-    marker.text = std::to_string(seq);
-    marker.scale.z = 0.25;
-    marker.lifetime = ros::Duration();
-
-    marker.pose.orientation = tf_gt_last.transform.rotation;
-    marker.pose.position.x = tf_gt_last.transform.translation.x;
-    marker.pose.position.y = tf_gt_last.transform.translation.y;
-    marker.pose.position.z = tf_gt_last.transform.translation.z;
-
-    marker.color.a = 1.0; // Don't forget to set the alpha!
-    marker.color.r = 0.0f;
-    marker.color.g = 1.0f;
-    marker.color.b = 1.0f;
-
-    idx_text_array.markers.emplace_back(marker);
-    pub_pose_idx.publish(idx_text_array);
-  }
-
-  void publishLCConnections(const std::vector<std::pair<int, int>> &new_lc_pairs, ros::Time time) {
-    printf("Num new pairs: %lu\n", new_lc_pairs.size());
-    line_array.markers.clear();
-
-    for (const auto &pr: new_lc_pairs) {
-      visualization_msgs::Marker marker;
-      marker.header.frame_id = "world";
-      marker.header.stamp = time;
-      marker.ns = "myns";
-      marker.id = lc_cnt++;
-
-      marker.action = visualization_msgs::Marker::ADD;
-      marker.type = visualization_msgs::Marker::LINE_STRIP;
-
-      double len = (g_poses[pr.first].T_wl.translation() - g_poses[pr.second].T_wl.translation()).norm();
-
-      geometry_msgs::Point p1;
-      p1.x = g_poses[pr.first].T_wl.translation().x();
-      p1.y = g_poses[pr.first].T_wl.translation().y();
-      p1.z = g_poses[pr.first].T_wl.translation().z() + g_poses[pr.first].z_shift;
-      marker.points.emplace_back(p1);
-      p1.x = g_poses[pr.second].T_wl.translation().x();
-      p1.y = g_poses[pr.second].T_wl.translation().y();
-      p1.z = g_poses[pr.second].T_wl.translation().z() + g_poses[pr.second].z_shift;
-      marker.points.emplace_back(p1);
-
-      marker.lifetime = ros::Duration();
-
-      if (len > 10)
-        marker.scale.x = 0.01;
-      else
-        marker.scale.x = 0.1;
-
-      marker.color.a = 1.0; // Don't forget to set the alpha!
-      marker.color.r = 0.0f;
-      marker.color.g = 1.0f;
-      marker.color.b = 0.0f;
-
-      line_array.markers.emplace_back(marker);
-    }
-    pub_lc_connections.publish(line_array);
   }
 
 };
