@@ -762,14 +762,14 @@ public:
     }
 
     // find the best ones with fine-tuning:
-    const int top_n = 5;
+    const int max_fine_opt = 5;
     std::vector<std::shared_ptr<const ContourManager>> res_cand_ptr;
     std::vector<double> res_corr;
     std::vector<Eigen::Isometry2d> res_T;
 
     clk.tic();
     cand_mng.tidyUpCandidates();
-    int num_best_cands = cand_mng.fineOptimize(top_n, res_cand_ptr, res_corr, res_T);
+    int num_best_cands = cand_mng.fineOptimize(max_fine_opt, res_cand_ptr, res_corr, res_T);
     t5 += clk.toc();
 
     if (num_best_cands) {

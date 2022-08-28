@@ -21,6 +21,11 @@ def raw_kitti_ts_to_seconds(ts_path, float_path):
 
 if __name__ == "__main__":
     print("")
-    kitti_raw_ts_file = "/home/lewis/Downloads/datasets/kitti_raw/2011_09_30/2011_09_30_drive_0018_sync/velodyne_points/timestamps.txt"
-    processed_file = "../results/kitti_seq05_seconds.txt"
+
+    # kitti_raw_ts_file = "/home/lewis/Downloads/datasets/kitti_raw/2011_09_30/2011_09_30_drive_0018_sync/velodyne_points/timestamps.txt"
+    # processed_file = "../results/kitti_seq05_seconds.txt"
+
+    kitti_raw_ts_file = "/home/lewis/Downloads/datasets/kitti_raw/2011_10_03/2011_10_03_drive_0027_sync/velodyne_points/timestamps.txt"
+    processed_file = "../results/kitti_seq00_seconds.txt"
+
     raw_kitti_ts_to_seconds(kitti_raw_ts_file, processed_file)

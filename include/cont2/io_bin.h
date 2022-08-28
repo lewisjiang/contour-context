@@ -19,6 +19,8 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 
+#include "tools/pointcloud_util.h"
+
 // Read KITTI lidar bin (same for MulRan)
 // assumptions/approximations:
 //  1. every lidar frame has a corresponding gt pose
@@ -139,40 +141,7 @@ public:
     std::string lidar_bin_path =
         kitti_raw_dir_ + "/" + date_ + "/" + seq_ + "/velodyne_points/data/" + str_idx0lead + ".bin";
 
-    // allocate 4 MB buffer (only ~130*4*4 KB are needed)
-    int num = 1000000;
-    auto *data = (float *) malloc(num * sizeof(float));
-    // pointers
-    float *px = data + 0;
-    float *py = data + 1;
-    float *pz = data + 2;
-    float *pr = data + 3;
-
-    FILE *stream;
-    stream = fopen(lidar_bin_path.c_str(), "rb");
-    if (stream) {
-      num = fread(data, sizeof(float), num, stream) / 4;
-      out_ptr.reset(new pcl::PointCloud<PointType>());
-      out_ptr->reserve(num);
-      for (int32_t i = 0; i < num; i++) {
-        PointType pt;
-        pt.x = *px;
-        pt.y = *py;
-        pt.z = *pz;
-        out_ptr->push_back(pt);
-
-        px += 4;
-        py += 4;
-        pz += 4;
-        pr += 4;
-      }
-      fclose(stream);
-
-    } else {
-      printf("Lidar bin file %s does not exist.\n", lidar_bin_path.c_str());
-      exit(-1);
-    }
-    return out_ptr;
+    return readKITTIPointCloudBin<PointType>(lidar_bin_path);
   }
 
 
