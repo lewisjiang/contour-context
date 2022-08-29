@@ -38,12 +38,25 @@ public:
 
   ///
   /// \param outer_cnt
-  /// \return if spin successful
-  bool spinOnce(int &outer_cnt) {
+  /// \return 0: normal. <0: external signal. 1: load failed
+  int spinOnce(int &outer_cnt) {
+    mtx_status.lock();
+    if (stat_terminated) {
+      printf("Spin terminated by external signal.\n");
+      mtx_status.unlock();
+      return -1;
+    }
+    if (stat_paused) {
+      printf("Spin paused by external signal.\n");
+      mtx_status.unlock();
+      return -2;
+    }
+    mtx_status.unlock();
+
     bool loaded = evaluator.loadNewScan();
     if (!loaded) {
       printf("Load new scan failed.\n");
-      return false;
+      return 1;
     }
     TicToc clk;
     ros::Time wall_time_ros = ros::Time::now();
@@ -69,6 +82,7 @@ public:
     geometry_msgs::TransformStamped tf_gt_curr = tf2::eigenToTransform(T_gt_curr);
     broadcastCurrPose(tf_gt_curr);  // the stamp is now
 
+    tf_gt_curr.header.seq = laser_info_tgt.seq;
     tf_gt_curr.transform.translation.z += time_translate.z();
     publishPath(wall_time_ros, tf_gt_curr);
     publishScanSeqText(wall_time_ros, tf_gt_curr, laser_info_tgt.seq);
@@ -94,6 +108,10 @@ public:
     clk.tic();
     contour_db.queryRangedKNN(ptr_cm_tgt, thres_lb_, thres_ub_, ptr_cands, cand_corr, bev_tfs);
     printf("%lu Candidates in %7.5fs: \n", ptr_cands.size(), clk.toc());
+
+//    if(laser_info_tgt.seq == 894){
+//      printf("Manual break point here.\n");
+//    }
 
     // 2.1 process query results
     CHECK(ptr_cands.size() < 2);
@@ -147,7 +165,7 @@ public:
     // 4. publish new vis
     publishLCConnections(new_lc_pairs, wall_time_ros);
 
-    return true;
+    return 0;
   }
 
   void savePredictionResults(const std::string &sav_path) const {
@@ -157,22 +175,32 @@ public:
 
 
 int main(int argc, char **argv) {
-  ros::init(argc, argv, "batch_bin_test");
-  ros::NodeHandle nh;
-
   FLAGS_alsologtostderr = true;
   google::InitGoogleLogging(argv[0]);
 
+  ros::init(argc, argv, "batch_bin_test");
+  ros::NodeHandle nh;
+
   printf("batch bin test start\n");
 
-  const int max_spin_cnt = 123456;
+  const int max_spin_cnt = 407000;
+  const int max_spin_att = 0;
+
+//  // Two file path
+//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti00.txt";
+//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti00.txt";
+//  // Check thres path
+//  std::string cand_score_config = PROJ_DIR + "/config/score_thres_kitti_bag_play.cfg";
+//  // Sav path
+//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti00.txt";
 
   // Two file path
-  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti00.txt";
-  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti00.txt";
+  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti08.txt";
+  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti08.txt";
   // Check thres path
   std::string cand_score_config = PROJ_DIR + "/config/score_thres_kitti_bag_play.cfg";
-  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti00.txt";
+  // Sav path
+  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti08.txt";
 
   // Main process:
   ContourDBConfig db_config;
@@ -183,17 +211,21 @@ int main(int argc, char **argv) {
 
   ros::Rate rate(30);
   int cnt = 0;
+  int cnt_attempted = 0;
 
   while (ros::ok()) {
     ros::spinOnce();
-    if (cnt > max_spin_cnt) {
-      printf("Max valid spin times %d reached. Exiting the loop...\n", max_spin_cnt);
+    if (cnt_attempted > max_spin_att) {
+      printf("Max spin attempt times %d reached. Exiting the loop...\n", max_spin_att);
       break;
     }
 
-    bool ret = o.spinOnce(cnt);
-    if (!ret)
+    cnt_attempted++;
+    int ret_code = o.spinOnce(cnt);
+    if (ret_code == -2 || ret_code == 1)
       ros::Duration(1.0).sleep();
+    else if (ret_code == -1)
+      break;
 
     rate.sleep();
   }

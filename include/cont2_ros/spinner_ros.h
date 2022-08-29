@@ -5,11 +5,16 @@
 #ifndef CONT2_SPINNER_ROS_H
 #define CONT2_SPINNER_ROS_H
 
+#include <thread>
+#include <ros/ros.h>
+#include <glog/logging.h>
+
 #include <nav_msgs/Path.h>
+#include <std_msgs/String.h>
 #include <visualization_msgs/MarkerArray.h>
 
 #include <geometry_msgs/PoseStamped.h>
-#include "tf2/transform_datatypes.h"
+#include <tf2/transform_datatypes.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 #include <tf2/convert.h>
@@ -39,12 +44,16 @@ struct BaseROSSpinner {
   visualization_msgs::MarkerArray idx_text_array;
 //  tf2_ros::Buffer tfBuffer;
 //  tf2_ros::TransformListener tfListener;
+  ros::Subscriber sub_stop_go;
 
   // The data used for general purpose (w/o gt files, etc.) in the work flow. Used to draw things. Add on the go.
   std::map<int, GlobalPoseInfo> g_poses;
 
   // bookkeeping
   u_int64_t lc_line_cnt = 0;
+  bool stat_paused = false;
+  bool stat_terminated = false;
+  std::mutex mtx_status;
 
   // additional util member variables:
 
@@ -57,7 +66,39 @@ struct BaseROSSpinner {
     pub_path = nh_.advertise<nav_msgs::Path>("/gt_path", 10000);
     pub_pose_idx = nh_.advertise<visualization_msgs::MarkerArray>("/pose_index", 10000);
     pub_lc_connections = nh_.advertise<visualization_msgs::MarkerArray>("/lc_connect", 10000);
+
+    // rostopic pub cont2_status std_msgs/String "pause" --once
+    // rostopic pub cont2_status std_msgs/String "resume" --once
+    // rostopic pub cont2_status std_msgs/String "toggle" --once
+    sub_stop_go = nh.subscribe("/cont2_status", 100, &BaseROSSpinner::statusCallback, this);
   }
+
+  void statusCallback(const std_msgs::String::ConstPtr &msg) {
+    mtx_status.lock();
+    if (msg->data == std::string("pause")) {
+      stat_paused = true;
+    } else if (msg->data == std::string("resume")) {
+      stat_paused = false;
+    } else if (msg->data == std::string("toggle")) {
+      stat_paused = !stat_paused;
+    } else if (msg->data == std::string("terminate")) {
+      stat_terminated = true;
+    }
+
+//    if (msg->data == std::string("end")) {
+//      printf("[H] %d \t Need reset\n", idx++);
+//      need_rst = true;
+//    } else if (msg->data == std::string("exit")) {
+//      printf("[H] %d rounds of simulation have finished cleanly. Exiting...\n", idx);
+//      mtx_status.unlock();
+//      ros::shutdown();
+//    } else {
+//      printf("[H] %d \t A new round\n", idx);
+//      CHECK(!need_rst);  // must finish reset before new round starts
+//    }
+    mtx_status.unlock();
+  }
+
 
   void publishPath(ros::Time time, const geometry_msgs::TransformStamped &tf_gt_last) {
     path_msg.header.stamp = time;

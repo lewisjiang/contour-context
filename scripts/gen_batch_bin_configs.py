@@ -29,6 +29,8 @@ def gen_kitti(dir_bins, f_pose, f_times, f_calib, sav_pos, sav_lid, addr_bin_beg
                  os.path.isfile(os.path.join(dir_bins, f)) and f[-3:] == "bin"]
     bin_files.sort()
     print("# bin files: ", len(bin_files))
+    for bf in bin_files:
+        assert len(bf.split()) <= 1  # no space in the path string
 
     with open(f_pose, "r") as f1:
         gt_poses = [[eval(p) for p in line.strip().split()] for line in f1.readlines() if line.strip()]
@@ -72,12 +74,21 @@ def gen_kitti(dir_bins, f_pose, f_times, f_calib, sav_pos, sav_lid, addr_bin_beg
 
 
 if __name__ == "__main__":
-    # KITTI00
-    dir_lid_bin = "/home/lewis/Downloads/datasets/kitti_raw/2011_10_03/2011_10_03_drive_0027_sync/velodyne_points/data"
-    fp_pose = "/home/lewis/Downloads/KITTI_data/dataset_gt/poses/00.txt"
-    fp_times = "/home/lewis/Downloads/KITTI_data/dataset/sequences/00/times.txt"
-    fp_calib = "/home/lewis/Downloads/KITTI_data/dataset/sequences/00/calib.txt"
-    sav_1 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-sens_pose-kitti00.txt"
-    sav_2 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-kitti00.txt"
+    # # KITTI00
+    # # dir_lid_bin = "/home/lewis/Downloads/datasets/kitti_raw/2011_10_03/2011_10_03_drive_0027_sync/velodyne_points/data"
+    # dir_lid_bin = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/00/velodyne"
+    # fp_pose = "/media/lewis/S7/Datasets/kitti/odometry/poses/dataset/poses/00.txt"
+    # fp_times = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/00/times.txt"
+    # fp_calib = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/00/calib.txt"
+    # sav_1 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-sens_pose-kitti00.txt"
+    # sav_2 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-kitti00.txt"
+
+    # KITTI08
+    dir_lid_bin = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/08/velodyne"
+    fp_pose = "/media/lewis/S7/Datasets/semantic_kitti/odometry/dataset/sequences/08/poses.txt"
+    fp_times = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/08/times.txt"
+    fp_calib = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/08/calib.txt"
+    sav_1 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-sens_pose-kitti08.txt"
+    sav_2 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-kitti08.txt"
 
     gen_kitti(dir_lid_bin, fp_pose, fp_times, fp_calib, sav_1, sav_2, 0)
