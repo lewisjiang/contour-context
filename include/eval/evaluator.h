@@ -45,7 +45,7 @@ struct PredictionOutcome {
 
 // Definition of loader
 // 1. use script to generate 2 files: (all ts are in ns)
-//  1) timestamp and gt pose of the sensor. Ordered by gt ts. (13 elements per line)
+//  1) timestamp and gt pose (z up) of the sensor. Ordered by gt ts. (13 elements per line)
 //  2) timestamp, seq, and the path (no space) of each lidar scan bin file.
 //    Ordered by lidar ts AND seq. (3 elements per line)
 // 2. load the .bin data in sequence, and find the gt pose
@@ -111,7 +111,8 @@ public:
           if ((i - 1) % 4 == 3)
             tmp_trans((i - 1) / 4) = tmp;
           else
-            tmp_rot_mat((i - 1) / 4, (i - 1) % 4);
+//            tmp_rot_mat((i - 1) / 4, (i - 1) % 4);  // `-Wuninitialized` cannot detect this bug!
+            tmp_rot_mat((i - 1) / 4, (i - 1) % 4) = tmp;
         }
       }
 
@@ -323,19 +324,45 @@ public:
 
     // tgt before src
     for (const auto &rec: pred_records) {
-      if (rec.id_src < 0)
-        res_file << rec.id_tgt << "-x" << "\t";
-      else
-        res_file << rec.id_tgt << "-" << rec.id_src << "\t";
       res_file << rec.tfpn << "\t";
+
+      std::string str_rep_tgt = laser_info_[rec.id_tgt].fpath, str_rep_src;
+
+      if (rec.id_src < 0) {
+        res_file << rec.id_tgt << "-x" << "\t";
+        str_rep_src = "x";
+      } else {
+        res_file << rec.id_tgt << "-" << rec.id_src << "\t";
+        str_rep_src = laser_info_[rec.id_src].fpath;
+      }
+
       res_file << rec.est_err[0] << "\t" << rec.est_err[1] << "\t" << rec.est_err[2] << "\t";
-      res_file << laser_info_[rec.id_tgt].fpath << "\t" << laser_info_[rec.id_src].fpath << "\n"; // may be too long
-//      res_file << laser_info_[rec.id_tgt].seq << "\t" << laser_info_[rec.id_src].seq << "\n";
+
+//      // case 1: path
+//      res_file << str_rep_tgt << "\t" << str_rep_src << "\n"; // may be too long
+
+      // case 2: shortened
+      int str_max_len = 32;
+      int beg_tgt = std::max(0, (int) str_rep_tgt.length() - str_max_len);
+      int beg_src = std::max(0, (int) str_rep_src.length() - str_max_len);
+      res_file << str_rep_tgt.substr(beg_tgt, str_rep_tgt.length() - beg_tgt) << "\t"
+               << str_rep_src.substr(beg_src, str_rep_src.length() - beg_src) << "\n";
+
     }
     // rmse and mean error can be calculated from this file. So we will not record it.
 
+
+    printf("In outcome file:\n");
+    printf("TP is %d\n", static_cast<std::underlying_type<PredictionOutcome::Res>::type>(PredictionOutcome::TP));
+    printf("FP is %d\n", static_cast<std::underlying_type<PredictionOutcome::Res>::type>(PredictionOutcome::FP));
+    printf("TN is %d\n", static_cast<std::underlying_type<PredictionOutcome::Res>::type>(PredictionOutcome::TN));
+    printf("FN is %d\n", static_cast<std::underlying_type<PredictionOutcome::Res>::type>(PredictionOutcome::FN));
+
+
     res_file.close();
     printf("Outcome saved successfully.\n");
+
+
   }
 
   inline double getTPMeanTrans() const { return tp_trans_rmse.getMean(); }
