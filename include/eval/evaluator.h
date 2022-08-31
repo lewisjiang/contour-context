@@ -63,7 +63,7 @@ class ContLCDEvaluator {
 
   // valid input info about lidar scans
   std::vector<LaserScanInfo> laser_info_;  // use predefined {seq-id, bin file} for better traceability
-  std::vector<int> assigned_seqs_;
+  std::vector<int> assigned_seqs_;  // actually a seq:addr map
 
   // param:
   const double ts_diff_tol = 1e-3;  // 1ms
@@ -71,7 +71,7 @@ class ContLCDEvaluator {
 
   // bookkeeping variables
   int p_lidar_curr = -1;
-//  std::map<int, LaserScanInfo>::iterator it_lidar_curr;
+//  std::map<int, LaserScanInfo>::iterator it_lidar_curr;  // int index is a little safer than iterator/pointer?
 
   // benchmark recorders
   SimpleRMSE<2> tp_trans_rmse, all_trans_rmse;
@@ -324,16 +324,22 @@ public:
 
     // tgt before src
     for (const auto &rec: pred_records) {
+      int addr_tgt = lookupNN<int>(rec.id_tgt, assigned_seqs_, 0);
+      CHECK_GE(addr_tgt, 0);
+
       res_file << rec.tfpn << "\t";
 
-      std::string str_rep_tgt = laser_info_[rec.id_tgt].fpath, str_rep_src;
+      std::string str_rep_tgt = laser_info_[addr_tgt].fpath, str_rep_src;
 
       if (rec.id_src < 0) {
         res_file << rec.id_tgt << "-x" << "\t";
         str_rep_src = "x";
       } else {
+        int addr_src = lookupNN<int>(rec.id_src, assigned_seqs_, 0);
+        CHECK_GE(addr_src, 0);
+
         res_file << rec.id_tgt << "-" << rec.id_src << "\t";
-        str_rep_src = laser_info_[rec.id_src].fpath;
+        str_rep_src = laser_info_[addr_src].fpath;
       }
 
       res_file << rec.est_err[0] << "\t" << rec.est_err[1] << "\t" << rec.est_err[2] << "\t";

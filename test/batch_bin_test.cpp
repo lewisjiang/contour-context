@@ -184,7 +184,7 @@ int main(int argc, char **argv) {
   printf("batch bin test start\n");
 
   const int max_spin_cnt = 407000;
-  const int max_spin_att = 0;
+  const int max_spin_att = 123450;
 
 //  // Two file path
 //  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti00.txt";

@@ -109,7 +109,11 @@ int main(int argc, char **argv) {
 
   // kitti 00
   std::string kitti_raw_dir = "/home/lewis/Downloads/datasets/kitti_raw", date = "2011_10_03", seq = "2011_10_03_drive_0027_sync";
-  ReadKITTILiDAR reader(kitti_raw_dir, date, seq);
+
+  // case raw(1/3): read from raw data
+  //  ReadKITTILiDAR reader(kitti_raw_dir, date, seq);
+
+  // case odom(1/3): use manually appointed data
 
 //  // visualize gt poses and index
 //  KittiBinDataVis data_test(nh, reader.getGNSSImuPoses());
@@ -137,13 +141,25 @@ int main(int argc, char **argv) {
 //  int idx_old = 806, idx_new = 1562;  // seek farther. 1562:793, 1563:816, nearest old: 808
 
   // sequence 00
-  int idx_old = 486, idx_new = 1333;  //
+//  int idx_old = 486, idx_new = 1333;  //
+
+  // kitti 08, in odom seq, not raw
+  int idx_old = 237, idx_new = 1648;  //
 
 
   std::string s_old, s_new;
 
-  pcl::PointCloud<pcl::PointXYZ>::ConstPtr out_ptr_old = reader.getLidarPointCloud<pcl::PointXYZ>(idx_old, s_old);
-  pcl::PointCloud<pcl::PointXYZ>::ConstPtr out_ptr_new = reader.getLidarPointCloud<pcl::PointXYZ>(idx_new, s_new);
+//  // case raw(2/3):
+//  pcl::PointCloud<pcl::PointXYZ>::ConstPtr out_ptr_old = reader.getLidarPointCloud<pcl::PointXYZ>(idx_old, s_old);
+//  pcl::PointCloud<pcl::PointXYZ>::ConstPtr out_ptr_new = reader.getLidarPointCloud<pcl::PointXYZ>(idx_new, s_new);
+
+  // case odom(2/3):
+  s_old = std::string(6 - std::to_string(idx_old).length(), '0') + std::to_string(idx_old);
+  s_new = std::string(6 - std::to_string(idx_new).length(), '0') + std::to_string(idx_new);
+  std::string path_bin_old = PROJ_DIR + "/sample_data/" + s_old + ".bin";
+  std::string path_bin_new = PROJ_DIR + "/sample_data/" + s_new + ".bin";
+  pcl::PointCloud<pcl::PointXYZ>::ConstPtr out_ptr_old = readKITTIPointCloudBin<pcl::PointXYZ>(path_bin_old);
+  pcl::PointCloud<pcl::PointXYZ>::ConstPtr out_ptr_new = readKITTIPointCloudBin<pcl::PointXYZ>(path_bin_new);
 
   ContourManagerConfig config;
   config.lv_grads_ = {1.5, 2, 2.5, 3, 3.5, 4};
@@ -197,7 +213,7 @@ int main(int argc, char **argv) {
 //  thres_lb.area_perc = 0.05;
 //  thres_ub.area_perc = 0.10;
 
-  thres_lb.sim_post.correlation = 0.65;
+  thres_lb.sim_post.correlation = 0.60;
   thres_ub.sim_post.correlation = 0.65;
 
   thres_lb.sim_post.area_perc = 0.05;
@@ -312,21 +328,39 @@ int main(int argc, char **argv) {
   corr_final.second = res_T[0];
 
   // eval with gt:
-  const auto &gt_poses = reader.getGNSSImuPoses();
-  const auto &T_imu_lidar = reader.get_T_imu_velod();
-  Eigen::Isometry3d gt_pose_old, gt_pose_new;
-  for (const auto &itm: gt_poses) {
-    if (itm.first == idx_old)
-      gt_pose_old = itm.second * T_imu_lidar;
-    else if (itm.first == idx_new)
-      gt_pose_new = itm.second * T_imu_lidar;
-  }
+  Eigen::Isometry3d gt_pose_old, gt_pose_new;  // sensor poses
+
+//  // case raw(3/3)
+//  const auto &gt_poses = reader.getGNSSImuPoses();
+//  const auto &T_imu_lidar = reader.get_T_imu_velod();
+//  for (const auto &itm: gt_poses) {
+//    if (itm.first == idx_old)
+//      gt_pose_old = itm.second * T_imu_lidar;
+//    else if (itm.first == idx_new)
+//      gt_pose_new = itm.second * T_imu_lidar;
+//  }
+
+  // case odom(3/3)
+  Eigen::Matrix<double, 3, 4> m12_old, m12_new;
+  m12_old
+      << 0.038273, -0.997186, -0.064466, 17.912492, 0.998634, 0.035872, 0.037996, 187.439841, -0.035577, -0.065832, 0.997196, -5.703635;
+  m12_new
+      << -0.035202, 0.997522, -0.060911, 17.172279, -0.999374, -0.034909, 0.005879, 183.415044, 0.003738, 0.061079, 0.998126, -5.634574;
+  gt_pose_old.setIdentity();
+  gt_pose_old.rotate(Eigen::Quaterniond(m12_old.block<3, 3>(0, 0)));
+  gt_pose_old.pretranslate(m12_old.block<3, 1>(0, 3));
+  gt_pose_new.setIdentity();
+  gt_pose_new.rotate(Eigen::Quaterniond(m12_new.block<3, 3>(0, 0)));
+  gt_pose_new.pretranslate(m12_new.block<3, 1>(0, 3));
+
 
 //  std::cout << gt_pose_old.matrix() << std::endl;
 //  std::cout << gt_pose_new.matrix() << std::endl;
 
+  std::cout << "T delta bev est 2d:\n" << T_init.matrix() << std::endl;  // the tf fed into python plot
+
   Eigen::Isometry2d T_est_sens_2d = ConstellCorrelation::getEstSensTF(corr_final.second, config);
-  std::cout << "T delta est 2d:\n" << T_est_sens_2d.matrix() << std::endl;
+  std::cout << "T delta sens est 2d:\n" << T_est_sens_2d.matrix() << std::endl;
 
   Eigen::Isometry2d T_err_2d = ConstellCorrelation::evalMetricEst(corr_final.second, gt_pose_old, gt_pose_new, config);
   std::cout << "Error 2d:\n" << T_err_2d.matrix() << std::endl;

@@ -84,7 +84,7 @@ target_link_libraries(${PROJECT_NAME}contops
 
 ### 0. rosbag play test of the project
 add_executable(${PROJECT_NAME}_bag_play_test
-        src/test/bag_play_test.cpp
+        test/bag_play_test.cpp
         src/cont2_ros/io_ros.cpp
         src/cont2_ros/spinner_ros.cpp
         src/eval/evaluator.cpp
@@ -99,7 +99,7 @@ target_link_libraries(${PROJECT_NAME}_bag_play_test
 
 ### 1.1 dummy test of the project
 add_executable(${PROJECT_NAME}_connect_test
-        src/test/connected_comp_test.cpp
+        test/connected_comp_test.cpp
         )
 target_link_libraries(${PROJECT_NAME}_connect_test
         #        ${PROJECT_NAME}map
@@ -111,7 +111,7 @@ target_link_libraries(${PROJECT_NAME}_connect_test
 
 ### 1.2 test flann
 add_executable(${PROJECT_NAME}_nanokdt_test
-        src/test/nanoflann_test.cpp
+        test/nanoflann_test.cpp
         )
 target_link_libraries(${PROJECT_NAME}_nanokdt_test
         ${glog_LIBRARIES}
@@ -120,7 +120,7 @@ target_link_libraries(${PROJECT_NAME}_nanokdt_test
 
 ### 1.3 test read bin kitti
 add_executable(${PROJECT_NAME}_kitti_bin_test
-        src/test/kitti_read_bin_test.cpp
+        test/kitti_read_bin_test.cpp
         )
 target_link_libraries(${PROJECT_NAME}_kitti_bin_test
         ${PROJECT_NAME}contops
@@ -131,9 +131,23 @@ target_link_libraries(${PROJECT_NAME}_kitti_bin_test
         ${OpenCV_LIBS}
         )
 
+### 1.4 test visualize point cloud
+add_executable(${PROJECT_NAME}_vis_cloud_bin_test
+        test/vis_point_cloud_test.cpp
+        )
+target_link_libraries(${PROJECT_NAME}_vis_cloud_bin_test
+        ${PROJECT_NAME}contops
+        ${glog_LIBRARIES}
+        ${catkin_LIBRARIES}
+        ${PCL_LIBRARIES}
+        ${CERES_LIBRARIES}
+        ${OpenCV_LIBS}
+        )
+
+
 ### 2. read and operate on bins (script formatted input) and display in ros
 add_executable(${PROJECT_NAME}_batch_bin_test
-        src/test/batch_bin_test.cpp
+        test/batch_bin_test.cpp
         src/cont2_ros/spinner_ros.cpp
         src/eval/evaluator.cpp
         )

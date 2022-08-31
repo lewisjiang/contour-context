@@ -10,6 +10,39 @@ import matplotlib.lines as lines
 import matplotlib.transforms as transforms
 
 
+def confidence_ellipse_2d(cov_xy, mean_xy, ax, n_std=3.0, facecolor='none', edgecolor='black', **kwargs):
+    """
+    New cov->ellipse that directly operates on init parameters
+    :param cov_xy:
+    :param mean_xy:
+    :param ax:
+    :param n_std:
+    :param facecolor:
+    :param edgecolor:
+    :param kwargs:
+    :return:
+    """
+    cov = np.array(cov_xy)
+    cov = (cov + cov.T) / 2
+
+    if cov[0, 0] * cov[1, 1] == 0:
+        return None
+    J, V = np.linalg.eigh(cov)  # The eigenvalues in ascending order
+
+    width = n_std * np.sqrt(J[1]) * 2
+    height = n_std * np.sqrt(J[0]) * 2
+    angle = np.arctan2(V[1, 1], V[1, 0])  # row (first dim) is the order parameter
+
+    ellipse = Ellipse((mean_xy[0], mean_xy[1]),
+                      width=width,
+                      height=height,
+                      angle=angle / np.pi * 180,
+                      facecolor=facecolor,
+                      edgecolor=edgecolor,
+                      **kwargs)
+    return ax.add_patch(ellipse)
+
+
 def confidence_ellipse_fromcov_2d(cov_xy, mean_xy, ax, n_std=3.0, facecolor='none', edgecolor='black', **kwargs):
     cov = np.array(cov_xy)
     if cov[0, 0] * cov[1, 1] == 0:
@@ -109,13 +142,13 @@ def plot_contours(raw_data=None, levels=None, legends=()):
     max_xy = [0, 0]
     tf_ed = True  # whether we use a transform T_delta (T_tgt = T_delta * T_src) to have a clearer view in tgt frame
     T_delta_str = """
- 0.707919  0.706293  -34.1896
--0.706293  0.707919   72.3844
-        0         0         1
+  -0.999999 -0.00140861     145.041
+ 0.00140861   -0.999999     149.279
+          0           0           1
     """
     T_delta_elem = [eval(i) for i in T_delta_str.split()]
     assert not tf_ed or len(T_delta_elem) == 9
-    T_delta = np.array(T_delta_elem).reshape([3, 3])
+    T_delta = np.array(T_delta_elem).reshape([3, 3])  # bev to bev transform (orig: pixel 0, 0), not sensor to sensor
 
     for i in range(len(raw_data)):
         data_color = cmap((i + 0.5) / len(raw_data))
@@ -143,7 +176,7 @@ def plot_contours(raw_data=None, levels=None, legends=()):
                 mean_xy = np.squeeze(mean_xy)
                 cov_xy = m_rot @ cov_xy @ m_rot.T
 
-            selected_idx = [i for i in range(10)]
+            selected_idx = [_ for _ in range(10)]
             # selected_idx = [1, 3, 5, 7]
             # selected_idx = [2, 4, 6, 8]
 
@@ -243,13 +276,24 @@ if __name__ == "__main__":
     # seq_old = 890  # final bus fn
     # seq_new = 2632
 
-    seq_old = 806  # seek farther
-    seq_new = 1562
+    # seq_old = 806  # seek farther
+    # seq_new = 1562
 
-    f_old = "../results/contours_orig-000000%04d.txt" % seq_old
-    f_new = "../results/contours_orig-000000%04d.txt" % seq_new
+    # # Sequence 00:
+    # seq_old = 486  # seek farther
+    # seq_new = 1333
+
+    # f_old = "../results/contours_orig-000000%04d.txt" % seq_old
+    # f_new = "../results/contours_orig-000000%04d.txt" % seq_new
+
+    # #########################################################
+    # Sequence 08, odom seq:
+    seq_old = 237
+    seq_new = 1648
+    f_old = "../results/contours_orig-assigned_id_0000%04d.txt" % seq_old
+    f_new = "../results/contours_orig-assigned_id_0000%04d.txt" % seq_new
+
     data_names = ("t=%04d" % seq_old, "t=%04d" % seq_new)
+    cont_data = [read_data_from_file(f_old), read_data_from_file(f_new)]
 
-    data1 = read_data_from_file(f_old)
-    data2 = read_data_from_file(f_new)
-    plot_contours([data1, data2], [0, 1, 2, 3, 4, 5], data_names)
+    plot_contours(cont_data, [0, 1, 2, 3, 4, 5], data_names)
