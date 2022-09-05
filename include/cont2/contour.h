@@ -292,7 +292,7 @@ struct ContourView {
     }
 
     if (std::max(cont_src.cell_cnt_, cont_tgt.cell_cnt_) > 15 &&
-        diff_delt<float>(cont_src.vol3_mean_, cont_tgt.vol3_mean_, 0.3f)) {
+        diff_delt<float>(cont_src.vol3_mean_, cont_tgt.vol3_mean_, 0.75f)) {   // NOTE: KITTI: 0.3, MulRan: 0.75,
       printf("\tAvg height not pass.\n");
       return ret;
     }

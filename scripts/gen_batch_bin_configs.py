@@ -4,12 +4,101 @@
 import numpy as np
 import re
 import os
+import csv
 
 
 # required file format:
 #  1) timestamp and gt pose of the sensor. Ordered by gt ts. (13 elements per line)
 #  2) timestamp, seq, and the path (no space) of each lidar scan bin file.
 #  Ordered by lidar ts AND seq. (3 elements per line)
+
+def gen_mulran(dir_bins, f_global_pose, sav_pos, sav_lid):
+    def rotx(t, deg=False):
+        if deg:
+            t = t * np.pi / 180
+        ct = np.cos(t)
+        st = np.sin(t)
+
+        return np.array([[1, 0, 0], [0, ct, -st], [0, st, ct]])
+
+    def roty(t, deg=False):
+        if deg:
+            t = t * np.pi / 180
+        ct = np.cos(t)
+        st = np.sin(t)
+
+        return np.array([[ct, 0, st], [0, 1, 0], [-st, 0, ct]])
+
+    def rotz(t, deg=False):
+        if deg:
+            t = t * np.pi / 180
+        ct = np.cos(t)
+        st = np.sin(t)
+
+        return np.array([[ct, -st, 0], [st, ct, 0], [0, 0, 1]])
+
+    # set the calibration
+    se3_6d = [1.7042, -0.021, 1.8047, 0.0001, 0.0003, 179.6654]  # calib: lidar_to_base_init_se3
+    trans = np.array(se3_6d[0:3]).reshape((3, 1))
+
+    roll = se3_6d[3]
+    pitch = se3_6d[4]
+    yaw = se3_6d[5]
+
+    rot = rotz(yaw, True) * roty(pitch, True) @ rotx(roll, True)
+
+    lidar_to_base_init_se3 = np.vstack([np.hstack([rot, trans]), np.array([[0, 0, 0, 1]])])
+    print(lidar_to_base_init_se3)
+
+    # calculate sensor gt poses
+    tss = []
+    poses = []
+    T_wl0 = None
+    tws0_set = False
+    with open(f_global_pose, newline='') as cf:
+        reader = csv.reader(cf, delimiter=',')
+        cnt_lines = 0
+        cnt_lines_valid = 0
+        for row in reader:
+            cnt_lines += 1
+            if len(row) == 13:
+                try:
+                    ts_sec = float(row[0]) * 1e-9
+                    tf12_base = np.array([float(a) for a in row[1:]])
+
+                    cnt_lines_valid += 1
+                    tss.append(ts_sec)
+
+                    T_wb = np.vstack([tf12_base.reshape((3, 4)), np.array([0, 0, 0, 1])])
+                    T_wl = T_wb @ np.linalg.inv(lidar_to_base_init_se3)
+
+                    if not tws0_set:
+                        T_wl0 = T_wl
+                        tws0_set = True
+
+                    T_l0l = np.linalg.inv(T_wl0) @ T_wl
+                    poses.append(T_l0l[0:3, :].reshape(-1))
+
+                except ValueError:
+                    print("Not a float in line: ", row)
+
+        print("valid gt lines read: %d/%d" % (cnt_lines_valid, cnt_lines))
+
+    np_file_pose_dat = np.hstack([np.array(tss).reshape((-1, 1)), np.vstack(poses)])
+    np.savetxt(sav_pos, np_file_pose_dat, "%.6f")
+
+    # handle file paths. Assumption: file name is ts in nano sec
+    bin_files = [f for f in os.listdir(dir_bins) if
+                 os.path.isfile(os.path.join(dir_bins, f)) and f[-4:] == ".bin"]
+    bin_files.sort()
+
+    print("valid bin file names under dir: %d/%d" % (len(bin_files), len([f for f in os.listdir(dir_bins)])))
+
+    lid_lines = []
+    for i, fn in enumerate(bin_files):
+        lid_lines.append("%.6f %d %s" % (eval(fn.split(".")[0]) * 1e-9, i, os.path.join(dir_bins, fn)))
+    with open(sav_lid, "w") as f1:
+        f1.write("\n".join(lid_lines))
 
 
 def gen_kitti(dir_bins, f_pose, f_times, f_calib, sav_pos, sav_lid, addr_bin_beg=0):
@@ -26,7 +115,7 @@ def gen_kitti(dir_bins, f_pose, f_times, f_calib, sav_pos, sav_lid, addr_bin_beg
     """
 
     bin_files = [os.path.join(dir_bins, f) for f in os.listdir(dir_bins) if
-                 os.path.isfile(os.path.join(dir_bins, f)) and f[-3:] == "bin"]
+                 os.path.isfile(os.path.join(dir_bins, f)) and f[-4:] == ".bin"]
     bin_files.sort()
     print("# bin files: ", len(bin_files))
     for bf in bin_files:
@@ -74,6 +163,7 @@ def gen_kitti(dir_bins, f_pose, f_times, f_calib, sav_pos, sav_lid, addr_bin_beg
 
 
 if __name__ == "__main__":
+    # =============================== KITTI Odometry ====================================
     # # KITTI00
     # # dir_lid_bin = "/home/lewis/Downloads/datasets/kitti_raw/2011_10_03/2011_10_03_drive_0027_sync/velodyne_points/data"
     # dir_lid_bin = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/00/velodyne"
@@ -84,11 +174,28 @@ if __name__ == "__main__":
     # sav_2 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-kitti00.txt"
 
     # KITTI08
-    dir_lid_bin = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/08/velodyne"
-    fp_pose = "/media/lewis/S7/Datasets/semantic_kitti/odometry/dataset/sequences/08/poses.txt"
-    fp_times = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/08/times.txt"
-    fp_calib = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/08/calib.txt"
-    sav_1 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-sens_pose-kitti08.txt"
-    sav_2 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-kitti08.txt"
+    # dir_lid_bin = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/08/velodyne"
+    # fp_pose = "/media/lewis/S7/Datasets/semantic_kitti/odometry/dataset/sequences/08/poses.txt"
+    # fp_times = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/08/times.txt"
+    # fp_calib = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/08/calib.txt"
+    # sav_1 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-sens_pose-kitti08.txt"
+    # sav_2 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-kitti08.txt"
+    #
+    # gen_kitti(dir_lid_bin, fp_pose, fp_times, fp_calib, sav_1, sav_2, 0)
 
-    gen_kitti(dir_lid_bin, fp_pose, fp_times, fp_calib, sav_1, sav_2, 0)
+    # =============================== Mulran Odometry ====================================
+
+    # # KAIST02
+    # dir_lid_bin = "/media/lewis/S7/Datasets/mulran/KAIST02/Ouster"
+    # fp_gt_ts_pose = "/media/lewis/S7/Datasets/mulran/KAIST02/global_pose.csv"
+    # sav_1 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-sens_pose-mulran-kaist02.txt"
+    # sav_2 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-mulran-kaist02.txt"
+
+    # Riverside02
+    dir_lid_bin = "/media/lewis/S7/Datasets/mulran/Riverside02/Ouster"
+    fp_gt_ts_pose = "/media/lewis/S7/Datasets/mulran/Riverside02/global_pose.csv"
+    sav_1 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-sens_pose-mulran-rs02.txt"
+    sav_2 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-mulran-rs02.txt"
+
+
+    gen_mulran(dir_lid_bin, fp_gt_ts_pose, sav_1, sav_2)

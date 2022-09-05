@@ -64,7 +64,10 @@ public:
 
     // 1. Init current scan
     ContourManagerConfig cm_config;
-    cm_config.lv_grads_ = {1.5, 2, 2.5, 3, 3.5, 4};
+//    cm_config.lv_grads_ = {1.5, 2, 2.5, 3, 3.5, 4};  // KITTI
+//    cm_config.lv_grads_ = {1.5, 2.5, 3.5, 4.5, 5.5, 6.5};  // mulran test 1
+//    cm_config.lv_grads_ = {1.0, 2.5, 4.0, 5.5, 7.0, 8.5};  // mulran
+    cm_config.lv_grads_ = {1.5, 2.0, 3.0, 4.5, 6.0, 7.0};  // mulran
 
     std::shared_ptr<ContourManager> ptr_cm_tgt = evaluator.getCurrContourManager(cm_config);
     const auto laser_info_tgt = evaluator.getCurrScanInfo();
@@ -194,13 +197,32 @@ int main(int argc, char **argv) {
 //  // Sav path
 //  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti00.txt";
 
-  // Two file path
-  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti08.txt";
-  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti08.txt";
+//  // KITTI 08
+//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti08.txt";
+//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti08.txt";
+//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti08.txt";
+//  // Check thres path
+//  std::string cand_score_config = PROJ_DIR + "/config/score_thres_kitti_bag_play.cfg";
+
+
+//  // Mulran KAIST 01
+//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-mulran-kaist01.txt";
+//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-mulran-kaist01.txt";
+//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-mulran-kaist01.txt";
+
+  // Mulran KAIST 01
+  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-mulran-kaist01.txt";
+  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-mulran-kaist01.txt";
+  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-mulran-kaist01.txt";
+
+//  // Mulran Riverside 02
+//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-mulran-rs02.txt";
+//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-mulran-rs02.txt";
+//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-mulran-rs02.txt";
+
+
   // Check thres path
   std::string cand_score_config = PROJ_DIR + "/config/score_thres_kitti_bag_play.cfg";
-  // Sav path
-  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti08.txt";
 
   // Main process:
   ContourDBConfig db_config;
@@ -212,6 +234,9 @@ int main(int argc, char **argv) {
   ros::Rate rate(30);
   int cnt = 0;
   int cnt_attempted = 0;
+
+  printf("\nHold for 3 seconds...\n");
+  std::this_thread::sleep_for(std::chrono::duration<double>(3.0));  // human readability: have time to see init output
 
   while (ros::ok()) {
     ros::spinOnce();

@@ -66,7 +66,7 @@ class ContLCDEvaluator {
   std::vector<int> assigned_seqs_;  // actually a seq:addr map
 
   // param:
-  const double ts_diff_tol = 1e-3;  // 1ms
+  const double ts_diff_tol = 10e-3;  // 10ms. In Mulran, the gt is given at an interval of about 10ms
   const double min_time_excl = 15.0;  // exclude 15s
 
   // bookkeeping variables

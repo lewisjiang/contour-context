@@ -540,6 +540,8 @@ public:
 
     cv::Mat mask, view;
     inRange(bev_, cv::Scalar::all(0), cv::Scalar::all(max_bin_val_), mask);
+//    inRange(bev_, cv::Scalar::all(0), cv::Scalar::all(5.0), mask);  // NOTE: set to a fixed max height for uniformity
+//    CHECK_GT(5.0, cfg_.lv_grads_.back());
     normalize(bev_, view, 0, 255, cv::NORM_MINMAX, -1, mask);
     std::string dir = std::string(PJSRCDIR) + "/results/bev_img/";
     cv::imwrite(dir + "cart_context-" + str_id_ + ".png", view);
@@ -715,9 +717,17 @@ public:
 
           RunningStatRecorder rec_tmp; // for case 3
 
+//          // Get data for visualization: (for data to draw plots in paper) paper data (1/3)
+//          bool vis_data = (ll == 2 && seq == 0 && int_id_ == 1648);
+//          if (vis_data) { printf("\n=== vis: \n"); }
+//          std::vector<KeyFloatType> dense_divs(140, 0);
+//          KeyFloatType ddiv_len = roi_radius / (140);
+
+
           for (int rr = r_min; rr <= r_max; rr++) {
             for (int cc = c_min; cc <= c_max; cc++) {
-              if (bev_(rr, cc) < cfg_.lv_grads_[ll])
+//              if (bev_(rr, cc) < cfg_.lv_grads_[ll])
+              if (bev_(rr, cc) < cfg_.lv_grads_[DIST_BIN_LAYERS[0]])  // NOTE: new key
                 continue;
 
               int q_hash = rr * cfg_.n_col_ + cc;
@@ -736,8 +746,10 @@ public:
 
               // case 2: gmm, normalized
               if (dist < roi_radius - 1e-2 && bev_(rr, cc) > cfg_.lv_grads_[DIST_BIN_LAYERS[0]]) { // imprv key variance
-                int higher_cnt = 1; // number of levels spanned by this pixel
-                for (int ele = ll + 1; ele < cfg_.lv_grads_.size(); ele++)
+//                int higher_cnt = 1; // number of levels spanned by this pixel
+//                for (int ele = ll + 1; ele < cfg_.lv_grads_.size(); ele++)
+                int higher_cnt = 0;
+                for (int ele = DIST_BIN_LAYERS[0]; ele < cfg_.lv_grads_.size(); ele++)
                   if (bev_(rr, cc) > cfg_.lv_grads_[ele])
                     higher_cnt++;
 
@@ -745,6 +757,13 @@ public:
                 for (int div_idx = 0; div_idx < num_bins * div_per_bin; div_idx++)
                   discrete_divs[div_idx] +=
                       higher_cnt * gaussPDF<KeyFloatType>(div_idx * div_len + 0.5 * div_len, dist, 1.0);
+
+//                if (vis_data) {  // paper data (2/3)
+//                  printf("discrete: %f %d %f\n", dist, higher_cnt, bev_(rr, cc));
+//                  for (int ddiv_idx = 0; ddiv_idx < dense_divs.size(); ddiv_idx++)
+//                    dense_divs[ddiv_idx] +=
+//                        higher_cnt * gaussPDF<KeyFloatType>(ddiv_idx * ddiv_len + 0.5 * ddiv_len, dist, 1.0);
+//                }
               }
 
 //              // case 3: using another ellipse
@@ -755,6 +774,13 @@ public:
 
             }
           }
+
+//          if (vis_data) {  // paper data (3/3)
+//            for (auto dense_div_dat: dense_divs)
+//              printf("%f,", dense_div_dat);
+//          }
+//          if (vis_data) { printf("\nend vis ===\n"); }
+
 
           // case 2: gmm, normalized
           for (int b = 0; b < num_bins; b++) {
