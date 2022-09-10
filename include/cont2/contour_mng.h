@@ -1257,7 +1257,7 @@ public:
   static Eigen::Isometry2d getTFFromConstell(const ContourManager &src, const ContourManager &tgt,
                                              Iter cstl_beg, Iter cstl_end) {  // no const, just don't modify in the code
     int num_elem = cstl_end - cstl_beg;
-    CHECK_GT(num_elem, 3);
+    CHECK_GT(num_elem, 2);
     Eigen::Matrix<double, 2, Eigen::Dynamic> pointset1; // src
     Eigen::Matrix<double, 2, Eigen::Dynamic> pointset2; // tgt
     pointset1.resize(2, num_elem);

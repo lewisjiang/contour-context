@@ -151,8 +151,8 @@ public:
         break;
     }
 
-    printf("TP Error mean: t:%7.4f m, r:%7.4f deg\n", evaluator.getTPMeanTrans(), evaluator.getTPMeanRot());
-    printf("TP Error rmse: t:%7.4f m, r:%7.4f deg\n", evaluator.getTPRMSETrans(), evaluator.getTPRMSERot());
+    printf("TP Error mean: t:%7.4f m, r:%7.4f rad\n", evaluator.getTPMeanTrans(), evaluator.getTPMeanRot());
+    printf("TP Error rmse: t:%7.4f m, r:%7.4f rad\n", evaluator.getTPRMSETrans(), evaluator.getTPRMSERot());
     printf("Accumulated tp poses: %d\n", cnt_tp);
     printf("Accumulated fn poses: %d\n", cnt_fn);
     printf("Accumulated fp poses: %d\n", cnt_fp);
