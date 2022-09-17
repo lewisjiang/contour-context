@@ -45,6 +45,7 @@ typename pcl::PointCloud<PointType>::ConstPtr readKITTIPointCloudBin(const std::
     printf("Lidar bin file %s does not exist.\n", lidar_bin_path.c_str());
     exit(-1);
   }
+  free(data);
   return out_ptr;
 }
 

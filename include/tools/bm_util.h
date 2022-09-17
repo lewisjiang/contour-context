@@ -97,6 +97,23 @@ public:
     clk.tic();  // auto reset, useful for sequential timing.
   }
 
+  /// record and reset timer
+  /// \param name The name of a log entry
+  void record(const std::string &name, double &dt_curr) {
+    const double dt = clk.toc();
+    auto it = logs.find(name);
+    if (it == logs.end()) {
+      logs[name] = OneLog(static_cast<int>(logs.size()), 1, dt);
+      max_len = std::max(max_len, name.length());
+    } else {
+      it->second.cnt++;
+      it->second.samps += dt;
+      it->second.autocorrs += dt * dt;
+    }
+    dt_curr = dt;
+    clk.tic();  // auto reset, useful for sequential timing.
+  }
+
   inline void lap() {
     cnt_loops++;
   }
@@ -120,10 +137,10 @@ public:
                 });
 
     double t_total = 0, t_accum = 0;
-    for (const auto &itm:vec)
+    for (const auto &itm: vec)
       t_total += itm.second.samps;
 
-    for (const auto &itm:vec) {
+    for (const auto &itm: vec) {
       const auto &lg = itm.second;
       double x_bar = lg.samps / lg.cnt;
       double stddev = 0;
@@ -170,10 +187,10 @@ public:
                 });
 
     double t_total = 0, t_accum = 0;
-    for (const auto &itm:vec)
+    for (const auto &itm: vec)
       t_total += itm.second.samps;
 
-    for (const auto &itm:vec) {
+    for (const auto &itm: vec) {
       const auto &lg = itm.second;
       double x_bar = lg.samps / lg.cnt;
       double stddev = 0;

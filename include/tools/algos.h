@@ -154,4 +154,13 @@ void alignUB(const T &bar, T &var) {
 //    var[i] = var[i] > bar ? bar : var[i];
 //}
 
+inline bool file_exists(const std::string &name) {
+  if (FILE *file = fopen(name.c_str(), "r")) {
+    fclose(file);
+    return true;
+  } else {
+    return false;
+  }
+}
+
 #endif //CONT2_ALGOS_H
