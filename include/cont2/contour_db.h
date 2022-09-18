@@ -18,6 +18,10 @@
 #include <utility>
 #include "KDTreeVectorOfVectorsAdaptor.h"
 
+#include "tools/bm_util.h"
+
+extern SequentialTimeProfiler stp;
+
 //typedef Eigen::Matrix<KeyFloatType, 4, 1> tree_key_t;
 typedef std::vector<RetrievalKey> my_vector_of_vectors_t;
 typedef KDTreeVectorOfVectorsAdaptor<my_vector_of_vectors_t, KeyFloatType> my_kd_tree_t;
@@ -48,8 +52,8 @@ public:
 };
 
 struct TreeBucketConfig {
-  double max_elapse_ = 20.0;  // the max spatial/temporal delay before adding to the trees
-  double min_elapse_ = 10.0;  // the min spatial/temporal delay to wait before adding to the trees
+  double max_elapse_ = 25.0;  // the max spatial/temporal delay before adding to the trees
+  double min_elapse_ = 15.0;  // the min spatial/temporal delay to wait before adding to the trees
 };
 
 struct IndexOfKey {  // where does the key come from? 1) global idx, 2) level, 3) ith/seq at that level
@@ -341,13 +345,6 @@ struct CandidateManager {
   const CandidateScoreEnsemble sim_ub_;  // the upper bound of check thres
   CandidateScoreEnsemble sim_var_;   // the (dynamic) lower bound of check thres, increase with positive predictions
 
-//  // check 1: `checkConstellSim`
-//  const ScoreConstellSim sim_constell_ub_;  // the upper bound of check thres
-//  ScoreConstellSim sim_constell_var_;  // the (dynamic) lower bound of check thres, increase with positive predictions
-//  // check 2: `checkPairwiseSim`
-//  const ScorePairwiseSim sim_pair_ub_;  // the upper bound of check thres
-//  ScorePairwiseSim sim_pair_var_;
-
   // data structure
   std::map<int, int> cand_id_pos_pair_;
   std::vector<CandidatePoseData> candidates_;
@@ -358,7 +355,6 @@ struct CandidateManager {
   int cand_aft_check1 = 0;  // number of candidate occurrence (not unique places) after each check
   int cand_aft_check2 = 0;
   int cand_aft_check3 = 0;
-  int cand_aft_check4 = 0;
 
   CandidateManager(std::shared_ptr<const ContourManager> cm_q,
                    const CandidateScoreEnsemble sim_lb, const CandidateScoreEnsemble sim_ub) :
@@ -391,12 +387,14 @@ struct CandidateManager {
       return ret_score;
     cand_aft_check1++;
 
+#if HUMAN_READABLE
     // human readability
     printf("Before check, curr bar:");
     sim_var_.sim_constell.print();
     printf("\t");
     sim_var_.sim_pair.print();
     printf("\n");
+#endif
 
     // check (2/4): pure constellation check
     std::vector<ConstellationPair> tmp_pairs1;
@@ -435,6 +433,8 @@ struct CandidateManager {
 //    }
 
     // Now we assume the pair has passed all the tests. We will add the results to the candidate data structure
+#if DYNAMIC_THRES
+    // (dynamic thres: 1/2)
     // 2. Update the dynamic score thresholds for different
     const int cnt_curr_valid = ret_pairwise_sim.cnt();  // the count of pairs for this positive match
     // 2.1 constell sim
@@ -452,13 +452,16 @@ struct CandidateManager {
 //    new_pair_lb.f_area_perc = ret_pairwise_sim.f_area_perc;
     alignLB<ScorePairwiseSim>(new_pair_lb, sim_var_.sim_pair);
     alignUB<ScorePairwiseSim>(sim_ub_.sim_pair, sim_var_.sim_pair);
+#endif
 
+#if HUMAN_READABLE
     // 2.3 human readability
     printf("Cand passed. New dynamic bar:");
     sim_var_.sim_constell.print();
     printf("\t");
     sim_var_.sim_pair.print();
     printf("\n");
+#endif
 
 
     // 3. add to/update candidates_
@@ -522,8 +525,8 @@ struct CandidateManager {
       std::swap(candidate.anch_props_[0], candidate.anch_props_[idx_sel]);
 
       // Overall test 1: area percentage score
-      printf("Cand id:%d, area perc: %f @max# %d votes\n", candidate.cm_cand_->getIntID(),
-             candidate.anch_props_[0].area_perc_, candidate.anch_props_[0].vote_cnt_);
+      printf("Cand id:%d, @max# %d votes, area perc: %f, \n", candidate.cm_cand_->getIntID(),
+             candidate.anch_props_[0].vote_cnt_, candidate.anch_props_[0].area_perc_);
       if (candidate.anch_props_[0].area_perc_ < sim_var_.sim_post.area_perc) { // check (1/3): area score.
         printf("Low area skipped: %6f < %6f\n", candidate.anch_props_[0].area_perc_, sim_var_.sim_post.area_perc);
         cnt_to_rm++;
@@ -546,8 +549,7 @@ struct CandidateManager {
       auto corr_score_init = (float) corr_est->initProblem(*(candidate.cm_cand_), *cm_tgt_,
                                                            candidate.anch_props_[0].T_delta_);
 
-      printf("Cand id:%d, init corr: %f @max# %d votes\n", candidate.cm_cand_->getIntID(), corr_score_init,
-             candidate.anch_props_[0].vote_cnt_);
+      printf("       :%d, init corr: %f\n", candidate.cm_cand_->getIntID(), corr_score_init);
 
       // TODO: find the best T_best for optimization init guess (based on problem->Evaluate())
       // Is it necessary?
@@ -558,22 +560,16 @@ struct CandidateManager {
         continue;
       }
 
-      // passes the test, update the thres variable, and update data structure info
+#if DYNAMIC_THRES
+      // passes the test, update the thres variable, and update data structure info  (dynamic thres: 2/2)
       auto new_post_lb = sim_var_.sim_post;
       new_post_lb.correlation = corr_score_init;
       new_post_lb.area_perc = candidate.anch_props_[0].area_perc_;
       new_post_lb.neg_est_dist = neg_est_trans_norm2d;
       alignLB<ScorePostProc>(new_post_lb, sim_var_.sim_post);
       alignUB<ScorePostProc>(sim_ub_.sim_post, sim_var_.sim_post);
-
-//      sim_var_.area_perc = candidate.anch_props_[0].area_perc_;  // right must ge left
-//      sim_var_.area_perc = sim_var_.area_perc > sim_ub_.area_perc ? sim_ub_.area_perc : sim_var_.area_perc;
-//
-//      sim_var_.correlation = corr_score_init;
-//      sim_var_.correlation = sim_var_.correlation > sim_ub_.correlation ? sim_ub_.correlation : sim_var_.correlation;
-
+#endif
 //      candidate.anch_props_[0].sim_score_.correlation_ = corr_score_init;
-      candidate.anch_props_[0].correlation_ = corr_score_init;
       candidate.corr_est_ = std::move(corr_est);
     }
 
@@ -615,9 +611,9 @@ struct CandidateManager {
       return 0;
 
     std::sort(candidates_.begin(), candidates_.end(), [&](const CandidatePoseData &d1, const CandidatePoseData &d2) {
-      return d1.anch_props_[0].vote_cnt_ > d2.anch_props_[0].vote_cnt_;  // anch_props_ is guaranteed to be non-empty
+//      return d1.anch_props_[0].vote_cnt_ > d2.anch_props_[0].vote_cnt_;  // anch_props_ is guaranteed to be non-empty
 //      return d1.sim_score_ > d2.sim_score_;
-//      return d1.sim_score_.correlation_ > d2.sim_score_.correlation_;
+      return d1.anch_props_[0].correlation_ > d2.anch_props_[0].correlation_;
     });
 
     int pre_sel_size = std::min(max_fine_opt, (int) candidates_.size());
@@ -636,7 +632,7 @@ struct CandidateManager {
                 return d1.anch_props_[0].correlation_ > d2.anch_props_[0].correlation_;
               });
 
-    printf("Fine optim corr:\n");
+    printf("Fine optim corrs:\n");
     int ret_size = 1;  // the needed
     for (int i = 0; i < ret_size; i++) {
       res_cand.emplace_back(candidates_[i].cm_cand_);
@@ -720,6 +716,7 @@ public:
         if (q_keys[seq].sum() != 0) {
           // 1. query
           clk.tic();
+          stp.start();
           std::vector<std::pair<IndexOfKey, KeyFloatType>> tmp_res;
 //          layer_db_[ll].layerRangeSearch(q_keys[seq], 3.0, tmp_res);  // 5.0: squared norm
           // calculate max query distance from key bits:
@@ -740,43 +737,49 @@ public:
                                (q_keys[seq][1] - key_bounds[1][1]) * (q_keys[seq][1] - key_bounds[1][1]))
                     + std::max((q_keys[seq][2] - key_bounds[2][0]) * (q_keys[seq][2] - key_bounds[2][0]),
                                (q_keys[seq][2] - key_bounds[2][1]) * (q_keys[seq][2] - key_bounds[2][1]));
-          printf("Dist ub: %f\n", dist_ub);
+
 
 //          layer_db_[ll].layerKNNSearch(q_keys[seq], 100, dist_ub, tmp_res);
           layer_db_[ll].layerKNNSearch(q_keys[seq], 50, dist_ub, tmp_res);
 //          layer_db_[ll].layerKNNSearch(q_keys[seq], 200, 2000.0, tmp_res);
+          stp.record("KNN search");
           t1 += clk.toc();
 
+#if HUMAN_READABLE
+          printf("Dist ub: %f\n", dist_ub);
           printf("L:%d S:%d. Found in range: %lu\n", q_levels_[ll], seq, tmp_res.size());
-
+#endif
           // 2. check
+          stp.start();
           for (const auto &sear_res: tmp_res) {
             clk.tic();
             auto cnt_chk_pass = cand_mng.checkCandWithHint(all_bevs_[sear_res.first.gidx],
                                                            ConstellationPair(q_levels_[ll], sear_res.first.seq, seq));
             t2 += clk.toc();
           }
+          stp.record("Constell");
 
         }
       }
     }
 
     // find the best ones with fine-tuning:
-    const int max_fine_opt = 5;
+    const int max_fine_opt = 10;
     std::vector<std::shared_ptr<const ContourManager>> res_cand_ptr;
     std::vector<double> res_corr;
     std::vector<Eigen::Isometry2d> res_T;
 
     clk.tic();
+    stp.start();
     cand_mng.tidyUpCandidates();
     int num_best_cands = cand_mng.fineOptimize(max_fine_opt, res_cand_ptr, res_corr, res_T);
+    stp.record("L2 opt");
     t5 += clk.toc();
 
     if (num_best_cands) {
       printf("After check 1: %d\n", cand_mng.cand_aft_check1);
       printf("After check 2: %d\n", cand_mng.cand_aft_check2);
       printf("After check 3: %d\n", cand_mng.cand_aft_check3);
-      printf("After check 4: %d\n", cand_mng.cand_aft_check4);
     } else {
       printf("No candidates are valid after checks.\n");
     }

@@ -275,32 +275,43 @@ struct ContourView {
     // 1. area, 2.3. eig, 4. com;
     if (diff_perc<float>(cont_src.cell_cnt_, cont_tgt.cell_cnt_, 0.2f)
         && diff_delt<float>(cont_src.cell_cnt_, cont_tgt.cell_cnt_, 6.0f)) {
+#if HUMAN_READABLE
       printf("\tCell cnt not pass.\n");
+#endif
       return ret;
     }
 
     if (std::max(cont_src.eig_vals_(1), cont_tgt.eig_vals_(1)) > 2.0 &&
         diff_perc<float>(std::sqrt(cont_src.eig_vals_(1)), std::sqrt(cont_tgt.eig_vals_(1)), 0.2f)) {
+#if HUMAN_READABLE
       printf("\tBig eigval not pass.\n");
+#endif
       return ret;
     }
 
     if (std::max(cont_src.eig_vals_(0), cont_tgt.eig_vals_(0)) > 2.0 &&
         diff_perc<float>(std::sqrt(cont_src.eig_vals_(0)), std::sqrt(cont_tgt.eig_vals_(0)), 0.2f)) {
+#if HUMAN_READABLE
       printf("\tSmall eigval not pass.\n");
+#endif
       return ret;
     }
 
     if (std::max(cont_src.cell_cnt_, cont_tgt.cell_cnt_) > 15 &&
-        diff_delt<float>(cont_src.vol3_mean_, cont_tgt.vol3_mean_, 0.75f)) {   // NOTE: KITTI: 0.3, MulRan: 0.75,
+//        diff_delt<float>(cont_src.vol3_mean_, cont_tgt.vol3_mean_, 0.3f)) {   // NOTE: KITTI: 0.3, MulRan: 0.75
+        diff_delt<float>(cont_src.vol3_mean_, cont_tgt.vol3_mean_, 0.75f)) {   // NOTE: KITTI: 0.3, MulRan: 0.75
+#if HUMAN_READABLE
       printf("\tAvg height not pass.\n");
+#endif
       return ret;
     }
 
     const float com_r1 = (cont_src.com_ - cont_src.pos_mean_).norm();
     const float com_r2 = (cont_tgt.com_ - cont_tgt.pos_mean_).norm();
     if (diff_delt<float>(com_r1, com_r2, 0.4f) && diff_perc<float>(com_r1, com_r2, 0.25f)) {
+#if HUMAN_READABLE
       printf("\tCom radius not pass.\n");
+#endif
       return ret;
     }
 

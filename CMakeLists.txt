@@ -12,6 +12,14 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14 -Wuninitialized")
 
 add_definitions(-DPJSRCDIR=\"${PROJECT_SOURCE_DIR}/\")
 
+# Macro parameters 1: No effects on execution results
+add_definitions(-DHUMAN_READABLE=0)  # bool: whether to tidy up and print (too detailed) results to screen
+add_definitions(-DSAVE_MID_FILE=0)   # bool: whether to save intermediate files (unnecessary to the program)
+add_definitions(-DPUB_ROS_MSG=0)     # bool: whether to publish message to the program
+
+# Macro parameters 2: Affects execution results
+add_definitions(-DDYNAMIC_THRES=0)   # bool: whether to use dynamic threshold when checking (lift lower bound on the go)
+
 #find_package(OpenMP QUIET)
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 
@@ -152,6 +160,20 @@ add_executable(${PROJECT_NAME}_batch_bin_test
         src/eval/evaluator.cpp
         )
 target_link_libraries(${PROJECT_NAME}_batch_bin_test
+        ${PROJECT_NAME}contops
+        ${glog_LIBRARIES}
+        ${catkin_LIBRARIES}
+        ${PCL_LIBRARIES}
+        ${OpenCV_LIBS}
+        )
+
+### 2.1 read and operate on bins (script formatted input) and display in ros, but runs many configs in parallel
+add_executable(${PROJECT_NAME}_batch_para_bin_test
+        test/batch_para_bin_test.cpp
+        src/cont2_ros/spinner_ros.cpp
+        src/eval/evaluator.cpp
+        )
+target_link_libraries(${PROJECT_NAME}_batch_para_bin_test
         ${PROJECT_NAME}contops
         ${glog_LIBRARIES}
         ${catkin_LIBRARIES}

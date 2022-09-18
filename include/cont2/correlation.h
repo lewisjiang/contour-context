@@ -94,7 +94,9 @@ struct GMMPair {
         }
       }
     }
+#if HUMAN_READABLE
     printf("Total pairs of gmm ellipses: %d\n", total_pairs);
+#endif
 
     // calc auto-correlation
     for (int li = 0; li < config.levels_.size(); li++) {
@@ -209,17 +211,19 @@ public:
                                        T_best_(0, 0))}; // set according to the constellation output.
 
     ceres::GradientProblemSolver::Options options;
-    options.minimizer_progress_to_stdout = true;
+    options.minimizer_progress_to_stdout = HUMAN_READABLE;
     options.max_num_iterations = 10;
     ceres::GradientProblemSolver::Summary summary;
     ceres::Solve(options, *problem_ptr, parameters, &summary);
 
+#if HUMAN_READABLE
     std::cout << summary.FullReport() << "\n";
 
-//    printf("Param after opt:\n");
-//    for (auto dat: parameters) {
-//      std::cout << dat << std::endl;
-//    }
+    printf("Param after opt:\n");
+    for (auto dat: parameters) {
+      std::cout << dat << std::endl;
+    }
+#endif
 
     // normalize the score according to cell counts, and return the optimized parameter
 //    Eigen::Isometry2d T_res;

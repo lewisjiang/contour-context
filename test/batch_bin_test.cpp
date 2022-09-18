@@ -7,8 +7,11 @@
 #include "cont2/contour_db.h"
 #include "eval/evaluator.h"
 #include "cont2_ros/spinner_ros.h"
+#include "tools/bm_util.h"
 
 const std::string PROJ_DIR = std::string(PJSRCDIR);
+
+SequentialTimeProfiler stp;
 
 class BatchBinSpinner : public BaseROSSpinner {
   // --- Added members for evaluation and LC module running ---
@@ -27,7 +30,7 @@ public:
                            const std::string &fpath_pose,
                            const std::string &fpath_laser) : BaseROSSpinner(nh_),
                                                              contour_db(db_config, std::move(q_levels)),
-                                                             evaluator(fpath_pose, fpath_laser) {
+                                                             evaluator(fpath_pose, fpath_laser, 0.6825) {
 
   }
 
@@ -66,10 +69,13 @@ public:
     ContourManagerConfig cm_config;
 //    cm_config.lv_grads_ = {1.5, 2, 2.5, 3, 3.5, 4};  // KITTI
 //    cm_config.lv_grads_ = {1.5, 2.5, 3.5, 4.5, 5.5, 6.5};  // mulran test 1
-//    cm_config.lv_grads_ = {1.0, 2.5, 4.0, 5.5, 7.0, 8.5};  // mulran
-    cm_config.lv_grads_ = {1.5, 2.0, 3.0, 4.5, 6.0, 7.0};  // mulran
+    cm_config.lv_grads_ = {1.0, 2.5, 4.0, 5.5, 7.0, 8.5};  // mulran used in paper
+//    cm_config.lv_grads_ = {1.5, 2.0, 3.0, 4.5, 6.0, 7.0};  // mulran
 
+    stp.lap();
+    stp.start();
     std::shared_ptr<ContourManager> ptr_cm_tgt = evaluator.getCurrContourManager(cm_config);
+    stp.record("make bev");
     const auto laser_info_tgt = evaluator.getCurrScanInfo();
     printf("\n===\nLoaded: assigned seq: %d, bin path: %s\n", laser_info_tgt.seq, laser_info_tgt.fpath.c_str());
 
@@ -82,6 +88,7 @@ public:
     time_translate = time_translate * (ts_curr - ts_beg) / 60;  // 1m per min
     g_poses.insert(std::make_pair(laser_info_tgt.seq, GlobalPoseInfo(T_gt_curr, time_translate.z())));
 
+#if PUB_ROS_MSG
     geometry_msgs::TransformStamped tf_gt_curr = tf2::eigenToTransform(T_gt_curr);
     broadcastCurrPose(tf_gt_curr);  // the stamp is now
 
@@ -89,9 +96,11 @@ public:
     tf_gt_curr.transform.translation.z += time_translate.z();
     publishPath(wall_time_ros, tf_gt_curr);
     publishScanSeqText(wall_time_ros, tf_gt_curr, laser_info_tgt.seq);
-
+#endif
 
     // 1.2. save images of layers
+
+#if SAVE_MID_FILE
     clk.tic();
     for (int i = 0; i < cm_config.lv_grads_.size(); i++) {
       std::string f_name = PROJ_DIR + "/results/layer_img/contour_" + "lv" + std::to_string(i) + "_" +
@@ -99,7 +108,7 @@ public:
       ptr_cm_tgt->saveContourImage(f_name, i);
     }
     std::cout << "Time save layers: " << clk.toctic() << std::endl;
-
+#endif
     ptr_cm_tgt->clearImage();  // a must to save memory
 
     // 2. query
@@ -120,17 +129,19 @@ public:
     CHECK(ptr_cands.size() < 2);
     PredictionOutcome pred_res;
     if (ptr_cands.empty())
-      pred_res = evaluator.addPrediction(ptr_cm_tgt);
+      pred_res = evaluator.addPrediction(ptr_cm_tgt, 0.0);
     else {
-      pred_res = evaluator.addPrediction(ptr_cm_tgt, ptr_cands[0], bev_tfs[0]);
+      pred_res = evaluator.addPrediction(ptr_cm_tgt, cand_corr[0], ptr_cands[0], bev_tfs[0]);
       new_lc_pairs.emplace_back(ptr_cm_tgt->getIntID(), ptr_cands[0]->getIntID());
+
+#if SAVE_MID_FILE
       // save images of pairs
       std::string f_name =
           PROJ_DIR + "/results/match_comp_img/lc_" + ptr_cm_tgt->getStrID() + "-" + ptr_cands[0]->getStrID() +
           ".png";
       ContourManager::saveMatchedPairImg(f_name, *ptr_cm_tgt, *ptr_cands[0]);
       printf("Image saved: %s-%s\n", ptr_cm_tgt->getStrID().c_str(), ptr_cands[0]->getStrID().c_str());
-
+#endif
     }
 
     switch (pred_res.tfpn) {
@@ -157,16 +168,18 @@ public:
     printf("Accumulated fn poses: %d\n", cnt_fn);
     printf("Accumulated fp poses: %d\n", cnt_fp);
 
+    stp.start();
     // 3. update database
     // add scan
     contour_db.addScan(ptr_cm_tgt, laser_info_tgt.ts);
     // balance
     clk.tic();
     contour_db.pushAndBalance(laser_info_tgt.seq, laser_info_tgt.ts);
+    stp.record("Update database");
     printf("Rebalance tree cost: %7.5f\n", clk.toc());
 
     // 4. publish new vis
-    publishLCConnections(new_lc_pairs, wall_time_ros);
+//    publishLCConnections(new_lc_pairs, wall_time_ros);
 
     return 0;
   }
@@ -174,6 +187,12 @@ public:
   void savePredictionResults(const std::string &sav_path) const {
     evaluator.savePredictionResults(sav_path);
   }
+
+  inline int get_tp() const { return cnt_tp; }
+
+  inline int get_fp() const { return cnt_fp; }
+
+  inline int get_fn() const { return cnt_fn; }
 };
 
 
@@ -186,8 +205,6 @@ int main(int argc, char **argv) {
 
   printf("batch bin test start\n");
 
-  const int max_spin_cnt = 407000;
-  const int max_spin_att = 123450;
 
 //  // Two file path
 //  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti00.txt";
@@ -203,6 +220,16 @@ int main(int argc, char **argv) {
 //  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti08.txt";
 //  // Check thres path
 //  std::string cand_score_config = PROJ_DIR + "/config/score_thres_kitti_bag_play.cfg";
+//
+//  // KITTI 51: Mulran as KITTI, KAIST01
+//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti51.txt";
+//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti51.txt";
+//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti51.txt";
+
+  // KITTI 62: Mulran as KITTI, RS02
+  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti62.txt";
+  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti62.txt";
+  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti62.txt";
 
 
 //  // Mulran KAIST 01
@@ -210,16 +237,17 @@ int main(int argc, char **argv) {
 //  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-mulran-kaist01.txt";
 //  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-mulran-kaist01.txt";
 
-  // Mulran KAIST 01
-  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-mulran-kaist01.txt";
-  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-mulran-kaist01.txt";
-  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-mulran-kaist01.txt";
+//  // Mulran KAIST 01
+//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-mulran-kaist01.txt";
+//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-mulran-kaist01.txt";
+//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-mulran-kaist01.txt";
 
 //  // Mulran Riverside 02
 //  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-mulran-rs02.txt";
 //  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-mulran-rs02.txt";
 //  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-mulran-rs02.txt";
 
+  stp = SequentialTimeProfiler(fpath_outcome_sav);
 
   // Check thres path
   std::string cand_score_config = PROJ_DIR + "/config/score_thres_kitti_bag_play.cfg";
@@ -231,21 +259,15 @@ int main(int argc, char **argv) {
   BatchBinSpinner o(nh, db_config, db_q_levels, fpath_sens_gt_pose, fpath_lidar_bins);
   o.loadThres(cand_score_config);
 
-  ros::Rate rate(30);
+  ros::Rate rate(300);
   int cnt = 0;
-  int cnt_attempted = 0;
 
   printf("\nHold for 3 seconds...\n");
   std::this_thread::sleep_for(std::chrono::duration<double>(3.0));  // human readability: have time to see init output
 
   while (ros::ok()) {
     ros::spinOnce();
-    if (cnt_attempted > max_spin_att) {
-      printf("Max spin attempt times %d reached. Exiting the loop...\n", max_spin_att);
-      break;
-    }
 
-    cnt_attempted++;
     int ret_code = o.spinOnce(cnt);
     if (ret_code == -2 || ret_code == 1)
       ros::Duration(1.0).sleep();
@@ -256,6 +278,10 @@ int main(int argc, char **argv) {
   }
 
   o.savePredictionResults(fpath_outcome_sav);
+
+  stp.printScreen(true);
+  const std::string log_dir = PROJ_DIR + "/log/";
+  stp.printFile(log_dir + "timing_cont2.txt", true);
 
 
   return 0;

@@ -19,6 +19,7 @@
 
 const std::string PROJ_DIR = std::string(PJSRCDIR);
 
+SequentialTimeProfiler stp;
 
 class RosBagPlayLoopTest : public BaseROSSpinner {
 
@@ -362,6 +363,8 @@ int main(int argc, char **argv) {
   std::string ts_path = "/home/lewis/catkin_ws2/src/contour-context/results/kitti_seq05_seconds.txt";
   std::string gt_pose_path = "/home/lewis/Downloads/KITTI_data/dataset_gt/poses/05.txt";
   std::string seq_calib_path = "/home/lewis/Downloads/KITTI_data/dataset/sequences/05/calib.txt";
+
+  stp = SequentialTimeProfiler(gt_pose_path);
 
   // KITTI seq 00:
 //  uint64_t t_seq_beg = 100000; // any small ts

@@ -368,10 +368,12 @@ struct BCI { //binary constellation identity
       }
       constell_res.emplace_back(src.level_, src.piv_seq_, tgt.piv_seq_);  // the pivots are also a pair.
 
+#if HUMAN_READABLE
       // the sort is for human readability
       std::sort(constell_res.begin(), constell_res.end(), [&](const ConstellationPair &a, const ConstellationPair &b) {
         return a.level < b.level || (a.level == b.level) && a.seq_src < b.seq_src;
       });
+#endif
 
       return ret;
 
@@ -538,6 +540,7 @@ public:
 //    size_t sizeInBytes = bev_.total() * bev_.elemSize();
 //    std::cout << "bev size byte: " << sizeInBytes<< std::endl;
 
+#if SAVE_MID_FILE
     cv::Mat mask, view;
     inRange(bev_, cv::Scalar::all(0), cv::Scalar::all(max_bin_val_), mask);
 //    inRange(bev_, cv::Scalar::all(0), cv::Scalar::all(5.0), mask);  // NOTE: set to a fixed max height for uniformity
@@ -545,6 +548,7 @@ public:
     normalize(bev_, view, 0, 255, cv::NORM_MINMAX, -1, mask);
     std::string dir = std::string(PJSRCDIR) + "/results/bev_img/";
     cv::imwrite(dir + "cart_context-" + str_id_ + ".png", view);
+#endif
   }
 
   void clearImage() {
@@ -903,9 +907,11 @@ public:
 //      }
 //    }
 
+#if SAVE_MID_FILE
     // save statistics of this scan:
     std::string fpath = std::string(PJSRCDIR) + "/results/contours_orig-" + str_id_ + ".txt";
     saveContours(fpath, cont_views_);
+#endif
 
     int cnt = 0;
     printf("Manager data sizes:\n");
@@ -1127,7 +1133,9 @@ public:
     cstl_out.clear();
     area_perc.clear();
     // 1. check individual sim
+#if HUMAN_READABLE
     printf("check individual sim of the constellation:\n");
+#endif
     for (auto pr: cstl_in) {
 //      if (ContourView::checkSim(*src.cont_views_[cstl_in[pr].level][cstl_in[pr].seq_src],
 //                                *tgt.cont_views_[cstl_in[pr].level][cstl_in[pr].seq_tgt]))
@@ -1139,14 +1147,16 @@ public:
         it.second += tgt.cont_perc_[pr.level][pr.seq_tgt];
         curr_success = true;
       }
-
+#if HUMAN_READABLE
       printf("%d@lev %d, %d-%d\n", int(curr_success), pr.level, pr.seq_src, pr.seq_tgt);
+#endif
     }
 
+#if HUMAN_READABLE
     for (const auto &rec: lev_frac) {
       printf("matched percent lev: %d, %.3f/%.3f\n", rec.first, rec.second.first, rec.second.second);
     }
-
+#endif
 
     ret.i_indiv_sim = cstl_out.size();
     if (ret.i_indiv_sim < lb.i_indiv_sim)
@@ -1187,11 +1197,13 @@ public:
     if (ret.i_orie_sim < lb.i_orie_sim)
       return ret;  // TODO: use cross level consensus to find more possible matched pairs
 
+#if HUMAN_READABLE
     std::sort(cstl_out.begin(), cstl_out.end());  // human readability
     printf("Found matched pairs:\n");
     for (const auto &i: cstl_out) {
       printf("\tlev %d, src:tgt  %d: %d\n", i.level, i.seq_src, i.seq_tgt);
     }
+#endif
 
     // get the percentage of each of the nodes in the constellation
     area_perc.reserve(cstl_out.size());
@@ -1221,29 +1233,6 @@ public:
 //    ret.f_area_perc = int(perc * 100);
 
     return ret;
-
-//    // 3. estimate transform using the data from current level
-//    Eigen::Matrix<double, 2, Eigen::Dynamic> pointset1; // src
-//    Eigen::Matrix<double, 2, Eigen::Dynamic> pointset2; // tgt
-//    pointset1.resize(2, cstl_out.size());
-//    pointset2.resize(2, cstl_out.size());
-//    for (int i = 0; i < cstl_out.size(); i++) {
-//      pointset1.col(
-//          i) = src.cont_views_[cstl_out[i].level][cstl_out[i].seq_src]->pos_mean_.cast<double>();
-//      pointset2.col(
-//          i) = tgt.cont_views_[cstl_out[i].level][cstl_out[i].seq_tgt]->pos_mean_.cast<double>();
-//    }
-//
-//    Eigen::Matrix3d T_delta = Eigen::umeyama(pointset1, pointset2, false);
-//    std::cout << "Transform matrix:\n" << T_delta << std::endl;
-//
-//
-////    ret.second = true;
-//    ret.second = cstl_out.size();
-//    ret.first.setIdentity();
-//    ret.first.rotate(std::atan2(T_delta(1, 0), T_delta(0, 0)));
-//    ret.first.pretranslate(T_delta.block<2, 1>(0, 2));
-//    return ret;
   }
 
   /// Calculate a transform from a list of manually/externally matched contour indices (constellation)
@@ -1270,8 +1259,9 @@ public:
     }
 
     Eigen::Matrix3d T_delta = Eigen::umeyama(pointset1, pointset2, false);
+#if HUMAN_READABLE
     std::cout << "Transform matrix:\n" << T_delta << std::endl;
-
+#endif
     Eigen::Isometry2d ret;
     ret.setIdentity();
     ret.rotate(std::atan2(T_delta(1, 0), T_delta(0, 0)));

@@ -41,6 +41,7 @@ struct PredictionOutcome {
   int id_tgt = -1;
   Res tfpn = Res::TN; // the most insignificant type
   double est_err[3]{};  // TP, FP: the error param on SE2, else: all zero
+  double correlation{};
 };
 
 // Definition of loader
@@ -51,7 +52,6 @@ struct PredictionOutcome {
 // 2. load the .bin data in sequence, and find the gt pose
 class ContLCDEvaluator {
   struct LaserScanInfo {
-//  bool has_gt_pose = false;  // default/useless lidar
     bool has_gt_positive_lc = false;
     Eigen::Isometry3d sens_pose;
     int seq = 0;
@@ -68,6 +68,7 @@ class ContLCDEvaluator {
   // param:
   const double ts_diff_tol = 10e-3;  // 10ms. In Mulran, the gt is given at an interval of about 10ms
   const double min_time_excl = 15.0;  // exclude 15s
+  const double sim_thres;  // the similarity score when determining TFPN
 
   // bookkeeping variables
   int p_lidar_curr = -1;
@@ -79,12 +80,11 @@ class ContLCDEvaluator {
   std::vector<PredictionOutcome> pred_records;
 
 public:
-  ContLCDEvaluator(const std::string &fpath_pose, const std::string &fpath_laser) {
+  ContLCDEvaluator(const std::string &fpath_pose, const std::string &fpath_laser, const double &bar) : sim_thres(bar) {
     std::fstream infile1, infile2;
     std::string sbuf, pname;
-    // TODO:
+
     //  1. read data from the 2 aforementioned files
-//    std::vector<PoseDatum> pose_data;
     std::vector<double> gt_tss;
     std::vector<Eigen::Isometry3d> gt_poses;
 
@@ -198,20 +198,47 @@ public:
     }
     printf("Ordering check passed\n");
 
-    // add info about gt loop closure
+//    // save gt pose and bin path, so we can arrange the data in KITTI format with script (format_mulran_as_kitti.py)
+//    std::FILE *fp1, *fp2, *fp3;
+//    std::string fp1_pose = std::string(PJSRCDIR) + "/results/mulran_to_kitti/poses.txt";
+//    std::string fp2_bin = std::string(PJSRCDIR) + "/results/mulran_to_kitti/used_bins.txt";
+//    std::string fp3_ts = std::string(PJSRCDIR) + "/results/mulran_to_kitti/times.txt";
+//    fp1 = std::fopen(fp1_pose.c_str(), "w");
+//    fp2 = std::fopen(fp2_bin.c_str(), "w");
+//    fp3 = std::fopen(fp3_ts.c_str(), "w");
+//    for (int i = 0; i < laser_info_.size(); i++) {
+//      for (int j = 0; j < 12; j++)
+//        fprintf(fp1, "%.6f ", laser_info_[i].sens_pose(j / 4, j % 4));
+//      fprintf(fp2, "%s", laser_info_[i].fpath.c_str());
+//      fprintf(fp3, "%.2f", i / 10.0);
+//      if (i < laser_info_.size() - 1) {
+//        fprintf(fp1, "\n");
+//        fprintf(fp2, "\n");
+//        fprintf(fp3, "\n");
+//      }
+//    }
+//    std::fclose(fp1);
+//    std::fclose(fp2);
+//    std::fclose(fp3);
+
+    // 3. Add info about gt loop closure
+    int cnt_gt_lc_p = 0;
     int cnt_gt_lc = 0;
     for (auto &it_fast: laser_info_) {  // not necessarily ordered by assigned seq
       for (auto &it_slow: laser_info_) {
         if (it_fast.ts < it_slow.ts + min_time_excl)
           break;
         double dist = (it_fast.sens_pose.translation() - it_slow.sens_pose.translation()).norm();
-        if (dist < 4.0) {
-          it_fast.has_gt_positive_lc = true;
+        if (dist < 5.0) {
+          if (!it_fast.has_gt_positive_lc) {
+            it_fast.has_gt_positive_lc = true;
+            cnt_gt_lc_p++;
+          }
           cnt_gt_lc++;
         }
       }
     }
-    printf("Found %d laser with gt loops.\n", cnt_gt_lc);
+    printf("Found %d poses with %d gt loops.\n", cnt_gt_lc_p, cnt_gt_lc);
 
   }
 
@@ -258,7 +285,7 @@ public:
 
   // 2. recorder.
   PredictionOutcome
-  addPrediction(const std::shared_ptr<const ContourManager> &q_mng,
+  addPrediction(const std::shared_ptr<const ContourManager> &q_mng, double est_corr,
                 const std::shared_ptr<const ContourManager> &cand_mng = nullptr,
                 const Eigen::Isometry2d &T_est_delta_2d = Eigen::Isometry2d::Identity()) {
     int id_tgt = q_mng->getIntID();  // q: src, cand: tgt
@@ -267,6 +294,7 @@ public:
 
     PredictionOutcome curr_res;
     curr_res.id_tgt = id_tgt;
+    curr_res.correlation = est_corr;
 
     if (cand_mng) {
       // The prediction is positive
@@ -288,13 +316,20 @@ public:
       printf(" Error: dx=%f, dy=%f, dtheta=%f\n", err_vec[0], err_vec[1], err_vec[2]);
 
       memcpy(curr_res.est_err, err_vec, sizeof(err_vec));
-      if (laser_info_[addr_tgt].has_gt_positive_lc && gt_trans_norm3d < 4.0) {  // TP
-        curr_res.tfpn = PredictionOutcome::TP;
+      if (est_corr >= sim_thres) {
+        if (laser_info_[addr_tgt].has_gt_positive_lc && gt_trans_norm3d < 5.0) {  // TP
+          curr_res.tfpn = PredictionOutcome::TP;
 
-        tp_trans_rmse.addOneErr(err_vec);
-        tp_rot_rmse.addOneErr(err_vec + 2);
-      } else {  // FP
-        curr_res.tfpn = PredictionOutcome::FP;
+          tp_trans_rmse.addOneErr(err_vec);
+          tp_rot_rmse.addOneErr(err_vec + 2);
+        } else {  // FP
+          curr_res.tfpn = PredictionOutcome::FP;
+        }
+      } else {
+        if (laser_info_[addr_tgt].has_gt_positive_lc)
+          curr_res.tfpn = PredictionOutcome::FN;
+        else
+          curr_res.tfpn = PredictionOutcome::TN;
       }
 
       all_trans_rmse.addOneErr(err_vec);
@@ -342,7 +377,7 @@ public:
         str_rep_src = laser_info_[addr_src].fpath;
       }
 
-      res_file << rec.est_err[0] << "\t" << rec.est_err[1] << "\t" << rec.est_err[2] << "\t";
+      res_file << rec.correlation << "\t" << rec.est_err[0] << "\t" << rec.est_err[1] << "\t" << rec.est_err[2] << "\t";
 
 //      // case 1: path
 //      res_file << str_rep_tgt << "\t" << str_rep_src << "\n"; // may be too long
