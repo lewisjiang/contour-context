@@ -1286,13 +1286,19 @@ public:
     DCHECK_EQ(cm2.getConfig().n_row_, cm1.getConfig().n_row_);
     DCHECK_EQ(cm2.getConfig().n_col_, cm1.getConfig().n_col_);
 
-    cv::Mat output((config.n_row_ + 1) * config.lv_grads_.size(), config.n_col_ * 2, CV_8U);
+//    cv::Mat output((config.n_row_ + 1) * config.lv_grads_.size(), config.n_col_ * 2, CV_8U);
+    cv::Mat output(config.n_row_ * 2 + 1, (config.n_col_ + 1) * config.lv_grads_.size(), CV_8U);
+
     output.setTo(255);
 
     for (int i = 0; i < config.lv_grads_.size(); i++) {
-      cm1.getContourImage(i).copyTo(output(cv::Rect(0, i * config.n_row_ + i, config.n_col_, config.n_row_)));
+//      cm1.getContourImage(i).copyTo(output(cv::Rect(0, i * config.n_row_ + i, config.n_col_, config.n_row_)));
+//      cm2.getContourImage(i).copyTo(
+//          output(cv::Rect(config.n_col_, i * config.n_row_ + i, config.n_col_, config.n_row_)));
+
+      cm1.getContourImage(i).copyTo(output(cv::Rect(i * config.n_col_ + i, 0, config.n_col_, config.n_row_)));
       cm2.getContourImage(i).copyTo(
-          output(cv::Rect(config.n_col_, i * config.n_row_ + i, config.n_col_, config.n_row_)));
+          output(cv::Rect(i * config.n_col_ + i, config.n_row_ + 1, config.n_col_, config.n_row_)));
     }
     cv::imwrite(fpath, output);
   }

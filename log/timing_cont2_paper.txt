@@ -1,0 +1,179 @@
+=== Time Profiling @2023-02-01 Wed 15:34:43 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti00.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       4541   8.31e-03   5.18e-03   8.31e-03      74.95      74.95
+    3          L2 opt       4541   1.20e-03   2.38e-03   1.20e-03      10.85      85.80
+    2        Constell      80881   4.93e-05   4.08e-05   8.78e-04       7.91      93.72
+    1      KNN search      80881   3.40e-05   2.62e-05   6.06e-04       5.46      99.18
+    4 Update database       4541   9.12e-05   2.71e-04   9.12e-05       0.82     100.00
+    *            *sum       4541          *          *   1.11e-02          *          *
+
+=== Time Profiling @2023-02-01 Wed 15:39:46 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti02.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       4661   8.99e-03   3.22e-03   8.99e-03      82.15      82.15
+    2        Constell      82981   4.71e-05   5.28e-04   8.39e-04       7.67      89.82
+    1      KNN search      82981   3.25e-05   2.46e-05   5.79e-04       5.30      95.12
+    3          L2 opt       4661   4.39e-04   1.14e-03   4.39e-04       4.01      99.13
+    4 Update database       4661   9.51e-05   2.83e-04   9.51e-05       0.87     100.00
+    *            *sum       4661          *          *   1.09e-02          *          *
+
+=== Time Profiling @2023-02-01 Wed 15:41:10 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti05.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       2761   8.61e-03   1.97e-03   8.61e-03      79.90      79.90
+    3          L2 opt       2761   9.09e-04   2.01e-03   9.09e-04       8.43      88.33
+    2        Constell      49264   4.25e-05   3.66e-05   7.58e-04       7.03      95.36
+    1      KNN search      49264   2.49e-05   1.87e-05   4.44e-04       4.12      99.48
+    4 Update database       2761   5.58e-05   1.35e-04   5.58e-05       0.52     100.00
+    *            *sum       2761          *          *   1.08e-02          *          *
+
+=== Time Profiling @2023-02-01 Wed 15:42:40 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti08.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       4071   9.22e-03   3.70e-03   9.22e-03      82.17      82.17
+    2        Constell      72699   4.14e-05   3.44e-05   7.40e-04       6.59      88.77
+    3          L2 opt       4071   6.64e-04   2.07e-03   6.64e-04       5.91      94.68
+    1      KNN search      72699   2.90e-05   2.18e-05   5.17e-04       4.61      99.29
+    4 Update database       4071   7.94e-05   2.22e-04   7.94e-05       0.71     100.00
+    *            *sum       4071          *          *   1.12e-02          *          *
+
+=== Time Profiling @2023-02-01 Wed 15:44:27 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti00.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       4541   7.67e-03   1.87e-03   7.67e-03      73.93      73.93
+    3          L2 opt       4541   1.18e-03   2.51e-03   1.18e-03      11.37      85.30
+    2        Constell      80881   4.78e-05   3.78e-05   8.51e-04       8.21      93.51
+    1      KNN search      80881   3.29e-05   2.47e-05   5.86e-04       5.65      99.15
+    4 Update database       4541   8.77e-05   2.56e-04   8.77e-05       0.85     100.00
+    *            *sum       4541          *          *   1.04e-02          *          *
+
+=== Time Profiling @2023-02-01 Wed 15:45:37 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti02.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       4661   8.64e-03   2.28e-03   8.64e-03      82.25      82.25
+    2        Constell      82981   4.44e-05   4.03e-05   7.91e-04       7.53      89.78
+    1      KNN search      82981   3.20e-05   2.45e-05   5.69e-04       5.42      95.20
+    3          L2 opt       4661   4.12e-04   7.14e-04   4.12e-04       3.92      99.12
+    4 Update database       4661   9.22e-05   2.59e-04   9.22e-05       0.88     100.00
+    *            *sum       4661          *          *   1.05e-02          *          *
+
+=== Time Profiling @2023-02-01 Wed 15:46:26 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti05.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       2761   8.42e-03   2.15e-03   8.42e-03      79.55      79.55
+    3          L2 opt       2761   9.17e-04   2.05e-03   9.17e-04       8.66      88.22
+    2        Constell      49264   4.21e-05   3.64e-05   7.52e-04       7.10      95.32
+    1      KNN search      49264   2.46e-05   1.84e-05   4.40e-04       4.15      99.47
+    4 Update database       2761   5.58e-05   1.35e-04   5.58e-05       0.53     100.00
+    *            *sum       2761          *          *   1.06e-02          *          *
+
+=== Time Profiling @2023-02-01 Wed 15:47:26 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti08.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       4071   8.77e-03   2.09e-03   8.77e-03      81.43      81.43
+    2        Constell      72699   4.11e-05   3.41e-05   7.34e-04       6.81      88.24
+    3          L2 opt       4071   6.75e-04   2.26e-03   6.75e-04       6.27      94.51
+    1      KNN search      72699   2.87e-05   2.15e-05   5.13e-04       4.76      99.27
+    4 Update database       4071   7.92e-05   2.18e-04   7.92e-05       0.73     100.00
+    *            *sum       4071          *          *   1.08e-02          *          *
+
+=== Time Profiling @2023-02-01 Wed 15:48:55 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti00.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       4541   7.69e-03   1.80e-03   7.69e-03      74.12      74.12
+    3          L2 opt       4541   1.17e-03   2.50e-03   1.17e-03      11.23      85.34
+    2        Constell      80881   4.77e-05   3.77e-05   8.49e-04       8.18      93.53
+    1      KNN search      80881   3.29e-05   2.47e-05   5.85e-04       5.64      99.16
+    4 Update database       4541   8.68e-05   2.53e-04   8.68e-05       0.84     100.00
+    *            *sum       4541          *          *   1.04e-02          *          *
+
+=== Time Profiling @2023-02-01 Wed 15:49:59 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti02.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       4661   8.59e-03   1.99e-03   8.59e-03      82.27      82.27
+    2        Constell      82981   4.42e-05   5.85e-05   7.88e-04       7.55      89.82
+    1      KNN search      82981   3.17e-05   2.40e-05   5.64e-04       5.41      95.23
+    3          L2 opt       4661   4.07e-04   7.08e-04   4.07e-04       3.90      99.12
+    4 Update database       4661   9.15e-05   2.59e-04   9.15e-05       0.88     100.00
+    *            *sum       4661          *          *   1.04e-02          *          *
+
+=== Time Profiling @2023-02-01 Wed 15:50:50 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti05.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       2761   8.44e-03   2.10e-03   8.44e-03      79.37      79.37
+    3          L2 opt       2761   9.39e-04   2.30e-03   9.39e-04       8.83      88.20
+    2        Constell      49264   4.23e-05   3.70e-05   7.56e-04       7.11      95.30
+    1      KNN search      49264   2.48e-05   1.88e-05   4.43e-04       4.17      99.47
+    4 Update database       2761   5.60e-05   1.36e-04   5.60e-05       0.53     100.00
+    *            *sum       2761          *          *   1.06e-02          *          *
+
+=== Time Profiling @2023-02-01 Wed 15:51:50 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti08.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       4071   8.93e-03   2.24e-03   8.93e-03      81.57      81.57
+    2        Constell      72699   4.15e-05   3.45e-05   7.41e-04       6.77      88.33
+    3          L2 opt       4071   6.78e-04   2.26e-03   6.78e-04       6.20      94.53
+    1      KNN search      72699   2.91e-05   2.19e-05   5.19e-04       4.74      99.27
+    4 Update database       4071   7.95e-05   2.17e-04   7.95e-05       0.73     100.00
+    *            *sum       4071          *          *   1.09e-02          *          *
+
+=== Time Profiling @2023-02-01 Wed 15:55:08 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti51.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       8034   7.93e-03   1.85e-03   7.93e-03      69.22      69.22
+    3          L2 opt       8034   1.73e-03   3.43e-03   1.73e-03      15.09      84.31
+    2        Constell     144407   4.88e-05   4.37e-05   8.77e-04       7.65      91.96
+    1      KNN search     144407   4.32e-05   3.06e-05   7.77e-04       6.77      98.73
+    4 Update database       8034   1.45e-04   4.25e-04   1.45e-04       1.27     100.00
+    *            *sum       8034          *          *   1.15e-02          *          *
+
+=== Time Profiling @2023-02-01 Wed 15:56:31 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti62.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       6792   7.22e-03   2.11e-03   7.22e-03      74.95      74.95
+    3          L2 opt       6792   1.07e-03   2.41e-03   1.07e-03      11.12      86.07
+    2        Constell     107765   4.58e-05   4.98e-05   7.27e-04       7.56      93.63
+    1      KNN search     107765   3.21e-05   2.56e-05   5.09e-04       5.29      98.91
+    4 Update database       6792   1.05e-04   3.11e-04   1.05e-04       1.09     100.00
+    *            *sum       6792          *          *   9.63e-03          *          *
+
+=== Time Profiling @2023-02-01 Wed 15:58:35 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti51.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       8034   7.78e-03   1.70e-03   7.78e-03      68.93      68.93
+    3          L2 opt       8034   1.73e-03   3.41e-03   1.73e-03      15.30      84.22
+    2        Constell     144407   4.79e-05   4.29e-05   8.61e-04       7.63      91.85
+    1      KNN search     144407   4.31e-05   3.11e-05   7.75e-04       6.86      98.72
+    4 Update database       8034   1.45e-04   4.20e-04   1.45e-04       1.28     100.00
+    *            *sum       8034          *          *   1.13e-02          *          *
+
+=== Time Profiling @2023-02-01 Wed 16:00:06 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti62.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       6792   7.08e-03   2.30e-03   7.08e-03      74.70      74.70
+    3          L2 opt       6792   1.05e-03   2.31e-03   1.05e-03      11.12      85.83
+    2        Constell     107765   4.59e-05   4.97e-05   7.28e-04       7.68      93.51
+    1      KNN search     107765   3.22e-05   2.60e-05   5.11e-04       5.39      98.90
+    4 Update database       6792   1.05e-04   3.11e-04   1.05e-04       1.10     100.00
+    *            *sum       6792          *          *   9.48e-03          *          *
+
+=== Time Profiling @2023-02-01 Wed 16:01:50 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti51.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       8034   7.85e-03   2.01e-03   7.85e-03      69.04      69.04
+    3          L2 opt       8034   1.73e-03   3.50e-03   1.73e-03      15.24      84.28
+    2        Constell     144407   4.81e-05   4.33e-05   8.65e-04       7.61      91.89
+    1      KNN search     144407   4.33e-05   3.11e-05   7.78e-04       6.84      98.73
+    4 Update database       8034   1.45e-04   4.21e-04   1.45e-04       1.27     100.00
+    *            *sum       8034          *          *   1.14e-02          *          *
+
+=== Time Profiling @2023-02-01 Wed 16:03:09 +0800 ===
+=== Description: /home/lewis/catkin_ws2/src/contour-context//results/outcome_txt/outcome-kitti62.txt
+Index            Name      Count    Average     Stddev   Per loop     Loop %    Accum %
+    0        make bev       6792   7.05e-03   2.20e-03   7.05e-03      74.81      74.81
+    3          L2 opt       6792   1.04e-03   2.27e-03   1.04e-03      11.02      85.83
+    2        Constell     107765   4.56e-05   4.92e-05   7.23e-04       7.68      93.51
+    1      KNN search     107765   3.20e-05   2.55e-05   5.07e-04       5.39      98.89
+    4 Update database       6792   1.04e-04   3.10e-04   1.04e-04       1.11     100.00
+    *            *sum       6792          *          *   9.42e-03          *          *

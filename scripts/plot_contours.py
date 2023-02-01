@@ -33,6 +33,9 @@ def confidence_ellipse_2d(cov_xy, mean_xy, ax, n_std=3.0, facecolor='none', edge
     height = n_std * np.sqrt(J[0]) * 2
     angle = np.arctan2(V[1, 1], V[1, 0])  # row (first dim) is the order parameter
 
+    # direct parameters to use in other plot script
+    # print("(%f, %f), %f, %f, %f" % (mean_xy[0], mean_xy[1], width, height, angle / np.pi * 180))
+
     ellipse = Ellipse((mean_xy[0], mean_xy[1]),
                       width=width,
                       height=height,
@@ -135,7 +138,14 @@ def plot_contours(raw_data=None, levels=None, legends=()):
     for i, l in enumerate(levels):
         level_map[l] = i
 
-    fig, axs = plt.subplots(1, len(levels), figsize=(len(levels) * 4, 4))
+    fig, axs = plt.subplots(1, len(levels), figsize=(len(levels) * 3, 4))
+    # fig, axs = plt.subplots(2, len(levels)//2, figsize=(8, 4))
+    # axs = [axs[i//(len(levels)//2), i%3] for i in range(len(levels))]
+    #
+    # fig = plt.figure(figsize=(9, 5))
+    # axs = [fig.add_subplot(231), fig.add_subplot(232), fig.add_subplot(233),
+    #         fig.add_subplot(234), fig.add_subplot(235), fig.add_subplot(236)]
+
     cmap = mpl.cm.get_cmap('jet')
     used_colors = []
 
@@ -151,7 +161,12 @@ def plot_contours(raw_data=None, levels=None, legends=()):
     T_delta = np.array(T_delta_elem).reshape([3, 3])  # bev to bev transform (orig: pixel 0, 0), not sensor to sensor
 
     for i in range(len(raw_data)):
+    # for i in range(1, -1,-1):
         data_color = cmap((i + 0.5) / len(raw_data))
+        if i == 0:
+            data_color = cm.get_cmap('Greens')(0.85)
+        if i == 1:
+            data_color = cm.get_cmap('Reds')(0.85)
         # print(data_color)
         used_colors.append(data_color)
         level_beg = 0
@@ -176,7 +191,7 @@ def plot_contours(raw_data=None, levels=None, legends=()):
                 mean_xy = np.squeeze(mean_xy)
                 cov_xy = m_rot @ cov_xy @ m_rot.T
 
-            selected_idx = [_ for _ in range(10)]
+            selected_idx = [_ for _ in range(20)]
             # selected_idx = [1, 3, 5, 7]
             # selected_idx = [2, 4, 6, 8]
 
@@ -184,8 +199,9 @@ def plot_contours(raw_data=None, levels=None, legends=()):
             max_xy[1] = max_xy[1] if max_xy[1] > mean_xy[1] else mean_xy[1]
 
             if j - level_beg in selected_idx:
-                confidence_ellipse_fromcov_2d(cov_xy, mean_xy, axs[level_map[raw_level]], 2.0, edgecolor=data_color,
-                                              linestyle='--')
+                print("scan", i, "lev ", raw_level, "#", j - level_beg)
+                confidence_ellipse_2d(cov_xy, mean_xy, axs[level_map[raw_level]], 2.0,
+                                      linestyle='-', edgecolor='none', facecolor=data_color, alpha=0.5)
                 # main_axis_from_cov_2d(cov_xy, mean_xy, axs[level_map[raw_level]], data_color)
             # 0. text: ranking in all contours of the scan
             # axs[level_map[raw_level]].text(mean_xy[0], mean_xy[1], str(j), color=data_color, fontsize=6)
@@ -202,15 +218,22 @@ def plot_contours(raw_data=None, levels=None, legends=()):
     # border = [0, 150, 0, 150]
     border = [0, max_xy[0] + 10, 0, max_xy[1] + 10]
     for i in range(len(levels)):
-        axs[i].set_title('Level %d' % levels[i])
+        # axs[i].set_title('Level %d' % levels[i])
+        axs[i].set_xlabel('Level %d' % levels[i])
         axs[i].set_aspect(aspect=1)
         axs[i].axis(border)
+
+        # https://pythonguides.com/matplotlib-remove-tick-labels/
+        axs[i].yaxis.set_ticklabels([])
+        axs[i].yaxis.set_ticks([])
+        axs[i].xaxis.set_ticklabels([])
+        axs[i].xaxis.set_ticks([])
 
     l_clr = [Ellipse((0, 0),
                      width=2,
                      height=2,
                      facecolor='none',
-                     edgecolor=c, linestyle='--') for c in used_colors]
+                     edgecolor=c, linestyle='-') for c in used_colors]
     axs[-1].legend(l_clr, legends)
     # axs[-1].legend()
 

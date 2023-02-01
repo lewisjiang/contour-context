@@ -13,6 +13,32 @@ const std::string PROJ_DIR = std::string(PJSRCDIR);
 
 SequentialTimeProfiler stp;
 
+std::string readDatasetID(const std::string &ksq_cfg_path) {
+  std::fstream infile;
+  infile.open(ksq_cfg_path, std::ios::in);
+  std::string res;
+
+  if (infile.rdstate() != std::ifstream::goodbit) {
+    std::cerr << "Error opening thres config file: " << ksq_cfg_path << std::endl;
+    return res;
+  }
+
+  std::string sbuf, pname;
+  while (std::getline(infile, sbuf)) {
+    std::istringstream iss(sbuf);
+    if (iss >> pname) {
+      std::cout << pname << std::endl;
+      if (pname[0] == '#')
+        continue;
+      if (pname == "ksq") {
+        iss >> res;
+      }
+    }
+  }
+  infile.close();
+  return res;
+}
+
 class BatchBinSpinner : public BaseROSSpinner {
   // --- Added members for evaluation and LC module running ---
   ContourDB contour_db;
@@ -30,7 +56,9 @@ public:
                            const std::string &fpath_pose,
                            const std::string &fpath_laser) : BaseROSSpinner(nh_),
                                                              contour_db(db_config, std::move(q_levels)),
-                                                             evaluator(fpath_pose, fpath_laser, 0.6825) {
+//                                                             evaluator(fpath_pose, fpath_laser, 0.960549) {
+//                                                             evaluator(fpath_pose, fpath_laser, 0.82515) {  // mf1 rs02
+                                                             evaluator(fpath_pose, fpath_laser, 0.64928) {  // mf1 k02
 
   }
 
@@ -84,7 +112,7 @@ public:
     if (ts_beg < 0) ts_beg = ts_curr;
 
     Eigen::Isometry3d T_gt_curr = laser_info_tgt.sens_pose;
-    Eigen::Vector3d time_translate(0, 0, 1);
+    Eigen::Vector3d time_translate(0, 0, 10);
     time_translate = time_translate * (ts_curr - ts_beg) / 60;  // 1m per min
     g_poses.insert(std::make_pair(laser_info_tgt.seq, GlobalPoseInfo(T_gt_curr, time_translate.z())));
 
@@ -95,7 +123,8 @@ public:
     tf_gt_curr.header.seq = laser_info_tgt.seq;
     tf_gt_curr.transform.translation.z += time_translate.z();
     publishPath(wall_time_ros, tf_gt_curr);
-    publishScanSeqText(wall_time_ros, tf_gt_curr, laser_info_tgt.seq);
+    if (laser_info_tgt.seq % 50 == 0)  // It is laggy to display too many characters in rviz
+      publishScanSeqText(wall_time_ros, tf_gt_curr, laser_info_tgt.seq);
 #endif
 
     // 1.2. save images of layers
@@ -113,6 +142,7 @@ public:
 
     // 2. query
     std::vector<std::pair<int, int>> new_lc_pairs;
+    std::vector<bool> new_lc_tfp;
     std::vector<std::shared_ptr<const ContourManager>> ptr_cands;
     std::vector<double> cand_corr;
     std::vector<Eigen::Isometry2d> bev_tfs;
@@ -132,16 +162,18 @@ public:
       pred_res = evaluator.addPrediction(ptr_cm_tgt, 0.0);
     else {
       pred_res = evaluator.addPrediction(ptr_cm_tgt, cand_corr[0], ptr_cands[0], bev_tfs[0]);
-      new_lc_pairs.emplace_back(ptr_cm_tgt->getIntID(), ptr_cands[0]->getIntID());
-
+      if (pred_res.tfpn == PredictionOutcome::TP || pred_res.tfpn == PredictionOutcome::FP) {
+        new_lc_pairs.emplace_back(ptr_cm_tgt->getIntID(), ptr_cands[0]->getIntID());
+        new_lc_tfp.emplace_back(pred_res.tfpn == PredictionOutcome::TP);
 #if SAVE_MID_FILE
-      // save images of pairs
-      std::string f_name =
-          PROJ_DIR + "/results/match_comp_img/lc_" + ptr_cm_tgt->getStrID() + "-" + ptr_cands[0]->getStrID() +
-          ".png";
-      ContourManager::saveMatchedPairImg(f_name, *ptr_cm_tgt, *ptr_cands[0]);
-      printf("Image saved: %s-%s\n", ptr_cm_tgt->getStrID().c_str(), ptr_cands[0]->getStrID().c_str());
+        // save images of pairs
+        std::string f_name =
+            PROJ_DIR + "/results/match_comp_img/lc_" + ptr_cm_tgt->getStrID() + "-" + ptr_cands[0]->getStrID() +
+            ".png";
+        ContourManager::saveMatchedPairImg(f_name, *ptr_cm_tgt, *ptr_cands[0]);
+        printf("Image saved: %s-%s\n", ptr_cm_tgt->getStrID().c_str(), ptr_cands[0]->getStrID().c_str());
 #endif
+      }
     }
 
     switch (pred_res.tfpn) {
@@ -178,8 +210,10 @@ public:
     stp.record("Update database");
     printf("Rebalance tree cost: %7.5f\n", clk.toc());
 
+#if PUB_ROS_MSG
     // 4. publish new vis
-//    publishLCConnections(new_lc_pairs, wall_time_ros);
+    publishLCConnections(new_lc_pairs, new_lc_tfp, wall_time_ros);
+#endif
 
     return 0;
   }
@@ -214,10 +248,17 @@ int main(int argc, char **argv) {
 //  // Sav path
 //  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti00.txt";
 
-//  // KITTI 08
-//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti08.txt";
-//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti08.txt";
-//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti08.txt";
+  std::string ksq = "08";
+
+  // read from config:
+  ksq = readDatasetID(PROJ_DIR + "/config/dataset_id.cfg");
+  printf("Using dataset: %s\n", ksq.c_str());
+  CHECK_NE(ksq, "");
+
+  // KITTI 08
+  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti" + ksq + ".txt";
+  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti" + ksq + ".txt";
+  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti" + ksq + ".txt";
 //  // Check thres path
 //  std::string cand_score_config = PROJ_DIR + "/config/score_thres_kitti_bag_play.cfg";
 //
@@ -226,16 +267,16 @@ int main(int argc, char **argv) {
 //  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti51.txt";
 //  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti51.txt";
 
-  // KITTI 62: Mulran as KITTI, RS02
-  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti62.txt";
-  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti62.txt";
-  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti62.txt";
+//  // KITTI 62: Mulran as KITTI, RS02
+//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti62.txt";
+//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti62.txt";
+//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti62.txt";
 
+//  // KITTI 72: Mulran as KITTI, DCC02
+//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti72.txt";
+//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti72.txt";
+//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti72.txt";
 
-//  // Mulran KAIST 01
-//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-mulran-kaist01.txt";
-//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-mulran-kaist01.txt";
-//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-mulran-kaist01.txt";
 
 //  // Mulran KAIST 01
 //  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-mulran-kaist01.txt";
@@ -246,6 +287,11 @@ int main(int argc, char **argv) {
 //  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-mulran-rs02.txt";
 //  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-mulran-rs02.txt";
 //  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-mulran-rs02.txt";
+
+//  // Mulran DCC 02
+//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-mulran-dcc02.txt";
+//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-mulran-dcc02.txt";
+//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-mulran-dcc.txt";
 
   stp = SequentialTimeProfiler(fpath_outcome_sav);
 

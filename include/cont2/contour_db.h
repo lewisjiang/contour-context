@@ -26,7 +26,7 @@ extern SequentialTimeProfiler stp;
 typedef std::vector<RetrievalKey> my_vector_of_vectors_t;
 typedef KDTreeVectorOfVectorsAdaptor<my_vector_of_vectors_t, KeyFloatType> my_kd_tree_t;
 
-const KeyFloatType MAX_BACKET_VAL = 1000.0f;
+const KeyFloatType MAX_BUCKET_VAL = 1000.0f;
 const KeyFloatType MAX_DIST_SQ = 1e6;
 
 template<
@@ -167,14 +167,14 @@ struct LayerDB {
   std::vector<KeyFloatType> bucket_ranges_;  // [min, max) pairs for buckets' range
   LayerDB() {
     bucket_ranges_.resize(max_num_backets_ + 1);
-    bucket_ranges_.front() = -MAX_BACKET_VAL;
-    bucket_ranges_.back() = MAX_BACKET_VAL;
-    buckets_.emplace_back(TreeBucketConfig(), -MAX_BACKET_VAL, MAX_BACKET_VAL);
+    bucket_ranges_.front() = -MAX_BUCKET_VAL;
+    bucket_ranges_.back() = MAX_BUCKET_VAL;
+    buckets_.emplace_back(TreeBucketConfig(), -MAX_BUCKET_VAL, MAX_BUCKET_VAL);
 
     // empty buckets
     for (int i = 1; i < max_num_backets_; i++) {
-      bucket_ranges_[i] = MAX_BACKET_VAL;
-      buckets_.emplace_back(TreeBucketConfig(), MAX_BACKET_VAL, MAX_BACKET_VAL);
+      bucket_ranges_[i] = MAX_BUCKET_VAL;
+      buckets_.emplace_back(TreeBucketConfig(), MAX_BUCKET_VAL, MAX_BUCKET_VAL);
     }
   }
 

@@ -144,11 +144,15 @@ struct BaseROSSpinner {
   ///
   /// \param new_lc_pairs The loop pair indexed by sequence key, consistent with map `g_poses`'s key field
   /// \param time
-  void publishLCConnections(const std::vector<std::pair<int, int>> &new_lc_pairs, ros::Time time) {
+  void publishLCConnections(const std::vector<std::pair<int, int>> &new_lc_pairs, const std::vector<bool> &TF_positive,
+                            ros::Time time) {
     printf("Num new pairs: %lu\n", new_lc_pairs.size());
     line_array.markers.clear();
 
-    for (const auto &pr: new_lc_pairs) {
+    DCHECK_EQ(new_lc_pairs.size(), TF_positive.size());
+
+    for (int i = 0; i < new_lc_pairs.size(); i++) {
+      const auto &pr = new_lc_pairs[i];
       visualization_msgs::Marker marker;
       marker.header.frame_id = "world";
       marker.header.stamp = time;
@@ -172,15 +176,19 @@ struct BaseROSSpinner {
 
       marker.lifetime = ros::Duration();
 
-      if (len > 10) // TODO: visualize false positive
-        marker.scale.x = 0.01;
-      else
-        marker.scale.x = 0.1;
+      marker.scale.x = 0.5;
+      if (TF_positive[i]) {
+        marker.color.a = 1.0; // Don't forget to set the alpha!
+        marker.color.r = 0.0f;
+        marker.color.g = 1.0f;
+        marker.color.b = 0.0f;
+      } else {
+        marker.color.a = 1.0; // Don't forget to set the alpha!
+        marker.color.r = 1.0f;
+        marker.color.g = 0.0f;
+        marker.color.b = 0.0f;
 
-      marker.color.a = 1.0; // Don't forget to set the alpha!
-      marker.color.r = 0.0f;
-      marker.color.g = 1.0f;
-      marker.color.b = 0.0f;
+      }
 
       line_array.markers.emplace_back(marker);
     }
