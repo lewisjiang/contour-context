@@ -14,8 +14,8 @@ add_definitions(-DPJSRCDIR=\"${PROJECT_SOURCE_DIR}/\")
 
 # Macro parameters 1: No effects on execution results
 add_definitions(-DHUMAN_READABLE=0)  # bool: whether to tidy up and print (too detailed) results to screen
-add_definitions(-DSAVE_MID_FILE=0)   # bool: whether to save intermediate files (unnecessary to the program)
-add_definitions(-DPUB_ROS_MSG=0)     # bool: whether to publish message to the program
+add_definitions(-DSAVE_MID_FILE=1)   # bool: whether to save intermediate files (unnecessary to the program)
+add_definitions(-DPUB_ROS_MSG=1)     # bool: whether to publish message to the program
 
 # Macro parameters 2: Affects execution results
 add_definitions(-DDYNAMIC_THRES=0)   # bool: whether to use dynamic threshold when checking (lift lower bound on the go)
@@ -84,26 +84,27 @@ add_library(${PROJECT_NAME}contops
         )
 
 target_link_libraries(${PROJECT_NAME}contops
-        ${catkin_LIBRARIES}
+#        ${catkin_LIBRARIES}
         ${PCL_LIBRARIES}
         ${glog_LIBRARIES}
         ${CERES_LIBRARIES}
-        )
-
-### 0. rosbag play test of the project
-add_executable(${PROJECT_NAME}_bag_play_test
-        test/bag_play_test.cpp
-        src/cont2_ros/io_ros.cpp
-        src/cont2_ros/spinner_ros.cpp
-        src/eval/evaluator.cpp
-        )
-target_link_libraries(${PROJECT_NAME}_bag_play_test
-        ${PROJECT_NAME}contops
-        ${glog_LIBRARIES}
-        ${catkin_LIBRARIES}
-        ${PCL_LIBRARIES}
         ${OpenCV_LIBS}
         )
+
+#### (outdated) 0. rosbag play test of the project
+#add_executable(${PROJECT_NAME}_bag_play_test
+#        test/bag_play_test.cpp
+#        src/cont2_ros/io_ros.cpp
+#        src/cont2_ros/spinner_ros.cpp
+#        src/eval/evaluator.cpp
+#        )
+#target_link_libraries(${PROJECT_NAME}_bag_play_test
+#        ${PROJECT_NAME}contops
+##        ${glog_LIBRARIES}
+#        ${catkin_LIBRARIES}
+##        ${PCL_LIBRARIES}
+##        ${OpenCV_LIBS}
+#        )
 
 ### 1.1 dummy test of the project
 add_executable(${PROJECT_NAME}_connect_test
@@ -126,18 +127,18 @@ target_link_libraries(${PROJECT_NAME}_nanokdt_test
         ${catkin_LIBRARIES}
         )
 
-### 1.3 test read bin kitti
-add_executable(${PROJECT_NAME}_kitti_bin_test
-        test/kitti_read_bin_test.cpp
-        )
-target_link_libraries(${PROJECT_NAME}_kitti_bin_test
-        ${PROJECT_NAME}contops
-        ${glog_LIBRARIES}
-        ${catkin_LIBRARIES}
-        ${PCL_LIBRARIES}
-        ${CERES_LIBRARIES}
-        ${OpenCV_LIBS}
-        )
+#### (outdated) 1.3 test read bin kitti
+#add_executable(${PROJECT_NAME}_kitti_bin_test
+#        test/kitti_read_bin_test.cpp
+#        )
+#target_link_libraries(${PROJECT_NAME}_kitti_bin_test
+#        ${PROJECT_NAME}contops
+#        ${glog_LIBRARIES}
+#        ${catkin_LIBRARIES}
+#        ${PCL_LIBRARIES}
+#        ${CERES_LIBRARIES}
+#        ${OpenCV_LIBS}
+#        )
 
 ### 1.4 test visualize point cloud
 add_executable(${PROJECT_NAME}_vis_cloud_bin_test
@@ -161,25 +162,22 @@ add_executable(${PROJECT_NAME}_batch_bin_test
         )
 target_link_libraries(${PROJECT_NAME}_batch_bin_test
         ${PROJECT_NAME}contops
-        ${glog_LIBRARIES}
         ${catkin_LIBRARIES}
-        ${PCL_LIBRARIES}
-        ${OpenCV_LIBS}
         )
 
-### 2.1 read and operate on bins (script formatted input) and display in ros, but runs many configs in parallel
-add_executable(${PROJECT_NAME}_batch_para_bin_test
-        test/batch_para_bin_test.cpp
-        src/cont2_ros/spinner_ros.cpp
-        src/eval/evaluator.cpp
-        )
-target_link_libraries(${PROJECT_NAME}_batch_para_bin_test
-        ${PROJECT_NAME}contops
-        ${glog_LIBRARIES}
-        ${catkin_LIBRARIES}
-        ${PCL_LIBRARIES}
-        ${OpenCV_LIBS}
-        )
+#### (outdated) 2.1 read and operate on bins (script formatted input) and display in ros, but runs many configs in parallel
+#add_executable(${PROJECT_NAME}_batch_para_bin_test
+#        test/batch_para_bin_test.cpp
+#        src/cont2_ros/spinner_ros.cpp
+#        src/eval/evaluator.cpp
+#        )
+#target_link_libraries(${PROJECT_NAME}_batch_para_bin_test
+#        ${PROJECT_NAME}contops
+#        ${glog_LIBRARIES}
+#        ${catkin_LIBRARIES}
+#        ${PCL_LIBRARIES}
+#        ${OpenCV_LIBS}
+#        )
 
 #add_executable(${PROJECT_NAME}_ros_lidar_test
 #        src/test/dummy_test.cpp

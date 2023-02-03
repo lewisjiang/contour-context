@@ -199,27 +199,45 @@ public:
     printf("Ordering check passed\n");
 
 //    // save gt pose and bin path, so we can arrange the data in KITTI format with script (format_mulran_as_kitti.py)
-//    std::FILE *fp1, *fp2, *fp3;
+//    std::FILE *fp1, *fp2, *fp3, *fp4, *fp5;
 //    std::string fp1_pose = std::string(PJSRCDIR) + "/results/mulran_to_kitti/poses.txt";
 //    std::string fp2_bin = std::string(PJSRCDIR) + "/results/mulran_to_kitti/used_bins.txt";
 //    std::string fp3_ts = std::string(PJSRCDIR) + "/results/mulran_to_kitti/times.txt";
+//
+//    // Use mulran data inplace, and re-index the sequence and timing of the scans
+//    std::string fp4_ts_lbins = std::string(PJSRCDIR) + "/results/mulran_to_kitti/ts-lidar_bins-.txt";
+//    std::string fp5_ts_spose = std::string(PJSRCDIR) + "/results/mulran_to_kitti/ts-sens_pose-.txt";
+//
 //    fp1 = std::fopen(fp1_pose.c_str(), "w");
 //    fp2 = std::fopen(fp2_bin.c_str(), "w");
 //    fp3 = std::fopen(fp3_ts.c_str(), "w");
+//    fp4 = std::fopen(fp4_ts_lbins.c_str(), "w");
+//    fp5 = std::fopen(fp5_ts_spose.c_str(), "w");
 //    for (int i = 0; i < laser_info_.size(); i++) {
-//      for (int j = 0; j < 12; j++)
+//      // Use mulran data inplace, and re-index the sequence and timing of the scans
+//      fprintf(fp4, "%.2f %d %s", i / 10.0, i, laser_info_[i].fpath.c_str());
+//      fprintf(fp5, "%.2f", i / 10.0);
+//
+//      for (int j = 0; j < 12; j++) {
 //        fprintf(fp1, "%.6f ", laser_info_[i].sens_pose(j / 4, j % 4));
+//        fprintf(fp5, "%.6f ", laser_info_[i].sens_pose(j / 4, j % 4));
+//      }
 //      fprintf(fp2, "%s", laser_info_[i].fpath.c_str());
 //      fprintf(fp3, "%.2f", i / 10.0);
 //      if (i < laser_info_.size() - 1) {
 //        fprintf(fp1, "\n");
 //        fprintf(fp2, "\n");
 //        fprintf(fp3, "\n");
+//        fprintf(fp4, "\n");
+//        fprintf(fp5, "\n");
 //      }
 //    }
 //    std::fclose(fp1);
 //    std::fclose(fp2);
 //    std::fclose(fp3);
+//    std::fclose(fp4);
+//    std::fclose(fp5);
+//    exit(0);
 
     // 3. Add info about gt loop closure
     int cnt_gt_lc_p = 0;

@@ -228,8 +228,6 @@ if __name__ == "__main__":
     # fp_gt_ts_pose = "/media/lewis/S7/Datasets/mulran/Riverside02/global_pose.csv"
     # sav_1 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-sens_pose-mulran-rs02.txt"
     # sav_2 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-mulran-rs02.txt"
-    #
-    #
 
     # # DCC02
     # dir_lid_bin = "/media/lewis/S7/Datasets/mulran/DCC02/Ouster"

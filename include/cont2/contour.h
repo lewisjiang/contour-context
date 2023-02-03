@@ -30,10 +30,18 @@ typedef Eigen::Matrix<double, 2, 2> M2D;
 
 
 struct ContourViewStatConfig {
-  int16_t min_cell_cov_ = 4;
-  float point_sigma_ = 1.0; // have nothing to do with resolution: on pixel only
+  int16_t min_cell_cov = 4;
+  float point_sigma = 1.0; // have nothing to do with resolution: on pixel only
   float com_bias_thres = 0.5;  // com dist from geometric center
 //  int half_strip_num_ = 4;
+};
+
+// The configuration for checking the similarity of two contours
+struct ContourSimThresConfig {
+  float ta_cell_cnt = 6, tp_cell_cnt = 0.2;
+  float tp_eigval = 0.2;
+  float ta_h_bar = 0.3;  // 0.75 for mulran
+  float ta_rcom = 0.4, tp_rcom = 0.25;
 };
 
 // use a separate recorder to record when creating contour view, and discard it after use.
@@ -141,9 +149,9 @@ struct ContourView {
 //    strip_width_.clear();   desc cont itself (3/6)
 
     // eccentricity:
-    if (cell_cnt_ < cfg.min_cell_cov_) {
-      pos_cov_ = M2F::Identity() * cfg.point_sigma_ * cfg.point_sigma_;
-      eig_vals_ = V2F(cfg.point_sigma_, cfg.point_sigma_);
+    if (cell_cnt_ < cfg.min_cell_cov) {
+      pos_cov_ = M2F::Identity() * cfg.point_sigma * cfg.point_sigma;
+      eig_vals_ = V2F(cfg.point_sigma, cfg.point_sigma);
       eig_vecs_.setIdentity();
       ecc_feat_ = false;
       com_feat_ = false;
@@ -156,10 +164,10 @@ struct ContourView {
           (cell_cnt_ - 1); // simplified, verified
       Eigen::SelfAdjointEigenSolver<M2F> es(pos_cov_.template selfadjointView<Eigen::Upper>());
       eig_vals_ = es.eigenvalues();  // increasing order
-      if (eig_vals_(0) < cfg.point_sigma_)  // determine if eccentricity feat using another function
-        eig_vals_(0) = cfg.point_sigma_;
-      if (eig_vals_(1) < cfg.point_sigma_)
-        eig_vals_(1) = cfg.point_sigma_;
+      if (eig_vals_(0) < cfg.point_sigma)  // determine if eccentricity feat using another function
+        eig_vals_(0) = cfg.point_sigma;
+      if (eig_vals_(1) < cfg.point_sigma)
+        eig_vals_(1) = cfg.point_sigma;
       eccen_ = std::sqrt(eig_vals_(1) * eig_vals_(1) - eig_vals_(0) * eig_vals_(0)) / eig_vals_(1);
       eig_vecs_ = es.eigenvectors();
 
@@ -267,14 +275,16 @@ struct ContourView {
   // This is one of the checks for consensus (distributional), the other one is constellation
   // T_tgt = T_delta * T_src
 //  static std::pair<Eigen::Isometry2d, bool> checkCorresp(const ContourView &cont_src, const ContourView &cont_tgt) {
-  static bool checkSim(const ContourView &cont_src, const ContourView &cont_tgt) {
+  static bool checkSim(const ContourView &cont_src, const ContourView &cont_tgt,
+                       const ContourSimThresConfig &simthres) {
+//                       const ContourSimThresConfig &simthres = ContourSimThresConfig()) {
     // very loose
     // TODO: more rigorous criteria (fewer branch, faster speed)
 //    std::pair<Eigen::Isometry2d, bool> ret(Eigen::Isometry2d(), false);
     bool ret = false;
     // 1. area, 2.3. eig, 4. com;
-    if (diff_perc<float>(cont_src.cell_cnt_, cont_tgt.cell_cnt_, 0.2f)
-        && diff_delt<float>(cont_src.cell_cnt_, cont_tgt.cell_cnt_, 6.0f)) {
+    if (diff_perc<float>(cont_src.cell_cnt_, cont_tgt.cell_cnt_, simthres.tp_cell_cnt)
+        && diff_delt<float>(cont_src.cell_cnt_, cont_tgt.cell_cnt_, simthres.ta_cell_cnt)) {
 #if HUMAN_READABLE
       printf("\tCell cnt not pass.\n");
 #endif
@@ -282,7 +292,7 @@ struct ContourView {
     }
 
     if (std::max(cont_src.eig_vals_(1), cont_tgt.eig_vals_(1)) > 2.0 &&
-        diff_perc<float>(std::sqrt(cont_src.eig_vals_(1)), std::sqrt(cont_tgt.eig_vals_(1)), 0.2f)) {
+        diff_perc<float>(std::sqrt(cont_src.eig_vals_(1)), std::sqrt(cont_tgt.eig_vals_(1)), simthres.tp_eigval)) {
 #if HUMAN_READABLE
       printf("\tBig eigval not pass.\n");
 #endif
@@ -290,7 +300,7 @@ struct ContourView {
     }
 
     if (std::max(cont_src.eig_vals_(0), cont_tgt.eig_vals_(0)) > 2.0 &&
-        diff_perc<float>(std::sqrt(cont_src.eig_vals_(0)), std::sqrt(cont_tgt.eig_vals_(0)), 0.2f)) {
+        diff_perc<float>(std::sqrt(cont_src.eig_vals_(0)), std::sqrt(cont_tgt.eig_vals_(0)), simthres.tp_eigval)) {
 #if HUMAN_READABLE
       printf("\tSmall eigval not pass.\n");
 #endif
@@ -298,8 +308,7 @@ struct ContourView {
     }
 
     if (std::max(cont_src.cell_cnt_, cont_tgt.cell_cnt_) > 15 &&
-//        diff_delt<float>(cont_src.vol3_mean_, cont_tgt.vol3_mean_, 0.3f)) {   // NOTE: KITTI: 0.3, MulRan: 0.75
-        diff_delt<float>(cont_src.vol3_mean_, cont_tgt.vol3_mean_, 0.75f)) {   // NOTE: KITTI: 0.3, MulRan: 0.75
+        diff_delt<float>(cont_src.vol3_mean_, cont_tgt.vol3_mean_, simthres.ta_h_bar)) {
 #if HUMAN_READABLE
       printf("\tAvg height not pass.\n");
 #endif
@@ -308,7 +317,7 @@ struct ContourView {
 
     const float com_r1 = (cont_src.com_ - cont_src.pos_mean_).norm();
     const float com_r2 = (cont_tgt.com_ - cont_tgt.pos_mean_).norm();
-    if (diff_delt<float>(com_r1, com_r2, 0.4f) && diff_perc<float>(com_r1, com_r2, 0.25f)) {
+    if (diff_delt<float>(com_r1, com_r2, simthres.ta_rcom) && diff_perc<float>(com_r1, com_r2, simthres.tp_rcom)) {
 #if HUMAN_READABLE
       printf("\tCom radius not pass.\n");
 #endif

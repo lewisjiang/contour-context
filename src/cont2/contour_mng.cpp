@@ -121,153 +121,155 @@ void ContourManager::saveContourImage(const std::string &fpath, int level) const
   cv::imwrite(fpath, getContourImage(level));
 }
 
-std::pair<Eigen::Isometry2d, bool>
-ContourManager::calcScanCorresp(const ContourManager &src, const ContourManager &tgt) {
-  DCHECK_EQ(src.cont_views_.size(), tgt.cont_views_.size());
-  printf("calcScanCorresp(): \n");
 
-  // configs
-  int num_tgt_top = 5;
-  int num_src_top = 4;
-
-  int num_tgt_ser = 10; // when initial result is positive, we progressively search more correspondence pairs
-  int num_src_ser = 10;
-  std::vector<std::pair<int, int>> src_q_comb = {{0, 1},
-                                                 {0, 2},
-                                                 {0, 3},
-                                                 {1, 2},
-                                                 {1, 3},
-                                                 {2, 3}};  // in accordance with num_src_top
-
-  std::pair<Eigen::Isometry2d, bool> ret{};
-  int num_levels = (int) src.cont_views_.size() - 2;
-
-  // TODO: check FP rate for retrieval tasks
-
-  for (int l = 0; l < num_levels; l++) {
-    if (src.cont_views_[l].size() < num_src_top || tgt.cont_views_[l].size() < 3)
-      continue;
-    if (ret.second)
-      break;
-    printf("Matching level: %d\n", l);
-    for (const auto &comb: src_q_comb) {
-      for (int i = 0; i < std::min((int) tgt.cont_views_[l].size(), num_tgt_top); i++)
-        for (int j = 0; j < std::min((int) tgt.cont_views_[l].size(), num_tgt_top); j++) {
-          if (j == i)
-            continue;
-          // Contour Correspondence Proposal: comb.first=i, comb.second=j
-          const auto sc1 = src.cont_views_[l][comb.first], sc2 = src.cont_views_[l][comb.second],
-              tc1 = tgt.cont_views_[l][i], tc2 = tgt.cont_views_[l][j];
-
-//            printf("-- Check src: %d, %d, tgt: %d, %d\n", comb.first, comb.second, i, j);
-
-          // 1. test if the proposal fits in terms of individual contours
-          bool is_pairs_sim = ContourView::checkSim(*sc1, *tc1) && ContourView::checkSim(*sc2, *tc2);
-          if (!is_pairs_sim) {
-            continue;
-          }
-
-          // 2. check geometry center distance
-          double dist_src = (sc1->pos_mean_ - sc2->pos_mean_).norm();
-          double dist_tgt = (tc1->pos_mean_ - tc2->pos_mean_).norm();
-          if (std::max(dist_tgt, dist_src) > 5.0 && diff_delt(dist_src, dist_tgt, 5.0))
-            continue;
-
-          // 3. check contour orientation
-          V2F cent_s = (sc1->pos_mean_ - sc2->pos_mean_).normalized();
-          V2F cent_t = (tc1->pos_mean_ - tc2->pos_mean_).normalized();
-          if (sc1->ecc_feat_ && tc1->ecc_feat_) {
-            float theta_s = std::acos(cent_s.transpose() * sc1->eig_vecs_.col(1));   // acos: [0,pi)
-            float theta_t = std::acos(cent_t.transpose() * tc1->eig_vecs_.col(1));
-            if (diff_delt<float>(theta_s, theta_t, M_PI / 12) && diff_delt<float>(M_PI - theta_s, theta_t, M_PI / 12))
-              continue;
-          }
-          if (sc2->ecc_feat_ && tc2->ecc_feat_) {
-            float theta_s = std::acos(cent_s.transpose() * sc2->eig_vecs_.col(1));   // acos: [0,pi)
-            float theta_t = std::acos(cent_t.transpose() * tc2->eig_vecs_.col(1));
-            if (diff_delt<float>(theta_s, theta_t, M_PI / 6) && diff_delt<float>(M_PI - theta_s, theta_t, M_PI / 6))
-              continue;
-          }
-
-          // 4. PROSAC
-          // 4.1 get the rough transform to facilitate the similarity check (relatively large acceptance range)
-          // can come from a naive 2 point transform estimation or a gmm2gmm
-          Eigen::Matrix3d T_delta = estimateTF<double>(sc1->pos_mean_.cast<double>(), sc2->pos_mean_.cast<double>(),
-                                                       tc1->pos_mean_.cast<double>(),
-                                                       tc2->pos_mean_.cast<double>()).matrix(); // naive 2 point estimation
-
-          // for pointset transform estimation
-          Eigen::Matrix<double, 2, Eigen::Dynamic> pointset1; // src
-          Eigen::Matrix<double, 2, Eigen::Dynamic> pointset2; // tgt
-          pointset1.resize(2, 2);
-          pointset2.resize(2, 2);
-          pointset1.col(0) = sc1->pos_mean_.cast<double>();
-          pointset1.col(1) = sc2->pos_mean_.cast<double>();
-          pointset2.col(0) = tc1->pos_mean_.cast<double>();
-          pointset2.col(1) = tc2->pos_mean_.cast<double>();
-
-          // 4.2 create adjacency matrix (binary weight bipartite graph) or calculate on the go?
-          std::vector<std::pair<int, int>> match_list = {{comb.first,  i},
-                                                         {comb.second, j}};
-          std::set<int> used_src{comb.first, comb.second}, used_tgt{i, j};
-          // 4.3 check if new pairs exit
-          double tf_dist_max = 5.0;
-          for (int ii = 0; ii < std::min((int) src.cont_views_[l].size(), num_src_ser); ii++) {
-            if (used_src.find(ii) != used_src.end())
-              continue;
-            for (int jj = 0; jj < std::min((int) tgt.cont_views_[l].size(), num_tgt_ser); jj++) {
-              if (used_tgt.find(jj) != used_tgt.end())
-                continue;
-              V2F pos_mean_src_tf = T_delta.block<2, 2>(0, 0).cast<float>() * src.cont_views_[l][ii]->pos_mean_
-                                    + T_delta.block<2, 1>(0, 2).cast<float>();
-              if ((pos_mean_src_tf - tgt.cont_views_[l][jj]->pos_mean_).norm() > tf_dist_max ||
-                  !ContourView::checkSim(*src.cont_views_[l][ii], *tgt.cont_views_[l][jj])
-                  )
-                continue;
-              // handle candidate pairs
-              // TODO: check consensus before adding:
-              match_list.emplace_back(ii, jj);
-              used_src.insert(ii);  // greedy
-              used_tgt.insert(jj);
-
-              // TODO: update transform
-              // pure point method: umeyama
-
-              pointset1.conservativeResize(Eigen::NoChange_t(), match_list.size());
-              pointset2.conservativeResize(Eigen::NoChange_t(), match_list.size());
-              pointset1.rightCols(1) = src.cont_views_[l][ii]->pos_mean_.cast<double>();
-              pointset2.rightCols(1) = tgt.cont_views_[l][jj]->pos_mean_.cast<double>();
-              T_delta = Eigen::umeyama(pointset1, pointset2, false);  // also need to check consensus
-
-            }
-            // TODO: termination criteria
-          }
-
-
-          // TODO: metric results, filter out some outlier
-          if (match_list.size() > 4) {
-            printf("Found matched pairs in level %d:\n", l);
-            for (const auto &pr: match_list) {
-              printf("\tsrc:tgt  %d: %d\n", pr.first, pr.second);
-            }
-            std::cout << "Transform matrix:\n" << T_delta << std::endl;
-            // TODO: move ret to later
-            ret.second = true;
-            ret.first.setIdentity();
-            ret.first.rotate(std::atan2(T_delta(1, 0), T_delta(0, 0)));
-            ret.first.pretranslate(T_delta.block<2, 1>(0, 2));
-          }
-        }
-    }
-
-    // TODO: cross level consensus
-
-    // TODO: full metric estimation
-
-  }
-
-  return ret;
-}
+// outdated
+//std::pair<Eigen::Isometry2d, bool>
+//ContourManager::calcScanCorresp(const ContourManager &src, const ContourManager &tgt) {
+//  DCHECK_EQ(src.cont_views_.size(), tgt.cont_views_.size());
+//  printf("calcScanCorresp(): \n");
+//
+//  // configs
+//  int num_tgt_top = 5;
+//  int num_src_top = 4;
+//
+//  int num_tgt_ser = 10; // when initial result is positive, we progressively search more correspondence pairs
+//  int num_src_ser = 10;
+//  std::vector<std::pair<int, int>> src_q_comb = {{0, 1},
+//                                                 {0, 2},
+//                                                 {0, 3},
+//                                                 {1, 2},
+//                                                 {1, 3},
+//                                                 {2, 3}};  // in accordance with num_src_top
+//
+//  std::pair<Eigen::Isometry2d, bool> ret{};
+//  int num_levels = (int) src.cont_views_.size() - 2;
+//
+//  // TODO: check FP rate for retrieval tasks
+//
+//  for (int l = 0; l < num_levels; l++) {
+//    if (src.cont_views_[l].size() < num_src_top || tgt.cont_views_[l].size() < 3)
+//      continue;
+//    if (ret.second)
+//      break;
+//    printf("Matching level: %d\n", l);
+//    for (const auto &comb: src_q_comb) {
+//      for (int i = 0; i < std::min((int) tgt.cont_views_[l].size(), num_tgt_top); i++)
+//        for (int j = 0; j < std::min((int) tgt.cont_views_[l].size(), num_tgt_top); j++) {
+//          if (j == i)
+//            continue;
+//          // Contour Correspondence Proposal: comb.first=i, comb.second=j
+//          const auto sc1 = src.cont_views_[l][comb.first], sc2 = src.cont_views_[l][comb.second],
+//              tc1 = tgt.cont_views_[l][i], tc2 = tgt.cont_views_[l][j];
+//
+////            printf("-- Check src: %d, %d, tgt: %d, %d\n", comb.first, comb.second, i, j);
+//
+//          // 1. test if the proposal fits in terms of individual contours
+//          bool is_pairs_sim = ContourView::checkSim(*sc1, *tc1) && ContourView::checkSim(*sc2, *tc2);
+//          if (!is_pairs_sim) {
+//            continue;
+//          }
+//
+//          // 2. check geometry center distance
+//          double dist_src = (sc1->pos_mean_ - sc2->pos_mean_).norm();
+//          double dist_tgt = (tc1->pos_mean_ - tc2->pos_mean_).norm();
+//          if (std::max(dist_tgt, dist_src) > 5.0 && diff_delt(dist_src, dist_tgt, 5.0))
+//            continue;
+//
+//          // 3. check contour orientation
+//          V2F cent_s = (sc1->pos_mean_ - sc2->pos_mean_).normalized();
+//          V2F cent_t = (tc1->pos_mean_ - tc2->pos_mean_).normalized();
+//          if (sc1->ecc_feat_ && tc1->ecc_feat_) {
+//            float theta_s = std::acos(cent_s.transpose() * sc1->eig_vecs_.col(1));   // acos: [0,pi)
+//            float theta_t = std::acos(cent_t.transpose() * tc1->eig_vecs_.col(1));
+//            if (diff_delt<float>(theta_s, theta_t, M_PI / 12) && diff_delt<float>(M_PI - theta_s, theta_t, M_PI / 12))
+//              continue;
+//          }
+//          if (sc2->ecc_feat_ && tc2->ecc_feat_) {
+//            float theta_s = std::acos(cent_s.transpose() * sc2->eig_vecs_.col(1));   // acos: [0,pi)
+//            float theta_t = std::acos(cent_t.transpose() * tc2->eig_vecs_.col(1));
+//            if (diff_delt<float>(theta_s, theta_t, M_PI / 6) && diff_delt<float>(M_PI - theta_s, theta_t, M_PI / 6))
+//              continue;
+//          }
+//
+//          // 4. PROSAC
+//          // 4.1 get the rough transform to facilitate the similarity check (relatively large acceptance range)
+//          // can come from a naive 2 point transform estimation or a gmm2gmm
+//          Eigen::Matrix3d T_delta = estimateTF<double>(sc1->pos_mean_.cast<double>(), sc2->pos_mean_.cast<double>(),
+//                                                       tc1->pos_mean_.cast<double>(),
+//                                                       tc2->pos_mean_.cast<double>()).matrix(); // naive 2 point estimation
+//
+//          // for pointset transform estimation
+//          Eigen::Matrix<double, 2, Eigen::Dynamic> pointset1; // src
+//          Eigen::Matrix<double, 2, Eigen::Dynamic> pointset2; // tgt
+//          pointset1.resize(2, 2);
+//          pointset2.resize(2, 2);
+//          pointset1.col(0) = sc1->pos_mean_.cast<double>();
+//          pointset1.col(1) = sc2->pos_mean_.cast<double>();
+//          pointset2.col(0) = tc1->pos_mean_.cast<double>();
+//          pointset2.col(1) = tc2->pos_mean_.cast<double>();
+//
+//          // 4.2 create adjacency matrix (binary weight bipartite graph) or calculate on the go?
+//          std::vector<std::pair<int, int>> match_list = {{comb.first,  i},
+//                                                         {comb.second, j}};
+//          std::set<int> used_src{comb.first, comb.second}, used_tgt{i, j};
+//          // 4.3 check if new pairs exit
+//          double tf_dist_max = 5.0;
+//          for (int ii = 0; ii < std::min((int) src.cont_views_[l].size(), num_src_ser); ii++) {
+//            if (used_src.find(ii) != used_src.end())
+//              continue;
+//            for (int jj = 0; jj < std::min((int) tgt.cont_views_[l].size(), num_tgt_ser); jj++) {
+//              if (used_tgt.find(jj) != used_tgt.end())
+//                continue;
+//              V2F pos_mean_src_tf = T_delta.block<2, 2>(0, 0).cast<float>() * src.cont_views_[l][ii]->pos_mean_
+//                                    + T_delta.block<2, 1>(0, 2).cast<float>();
+//              if ((pos_mean_src_tf - tgt.cont_views_[l][jj]->pos_mean_).norm() > tf_dist_max ||
+//                  !ContourView::checkSim(*src.cont_views_[l][ii], *tgt.cont_views_[l][jj])
+//                  )
+//                continue;
+//              // handle candidate pairs
+//              // TODO: check consensus before adding:
+//              match_list.emplace_back(ii, jj);
+//              used_src.insert(ii);  // greedy
+//              used_tgt.insert(jj);
+//
+//              // TODO: update transform
+//              // pure point method: umeyama
+//
+//              pointset1.conservativeResize(Eigen::NoChange_t(), match_list.size());
+//              pointset2.conservativeResize(Eigen::NoChange_t(), match_list.size());
+//              pointset1.rightCols(1) = src.cont_views_[l][ii]->pos_mean_.cast<double>();
+//              pointset2.rightCols(1) = tgt.cont_views_[l][jj]->pos_mean_.cast<double>();
+//              T_delta = Eigen::umeyama(pointset1, pointset2, false);  // also need to check consensus
+//
+//            }
+//            // TODO: termination criteria
+//          }
+//
+//
+//          // TODO: metric results, filter out some outlier
+//          if (match_list.size() > 4) {
+//            printf("Found matched pairs in level %d:\n", l);
+//            for (const auto &pr: match_list) {
+//              printf("\tsrc:tgt  %d: %d\n", pr.first, pr.second);
+//            }
+//            std::cout << "Transform matrix:\n" << T_delta << std::endl;
+//            // TODO: move ret to later
+//            ret.second = true;
+//            ret.first.setIdentity();
+//            ret.first.rotate(std::atan2(T_delta(1, 0), T_delta(0, 0)));
+//            ret.first.pretranslate(T_delta.block<2, 1>(0, 2));
+//          }
+//        }
+//    }
+//
+//    // TODO: cross level consensus
+//
+//    // TODO: full metric estimation
+//
+//  }
+//
+//  return ret;
+//}
 
 void ContourManager::makeContourRecursiveHelper(const cv::Rect &cc_roi, const cv::Mat1b &cc_mask, int level,
                                                 const std::shared_ptr<ContourView> &parent) {

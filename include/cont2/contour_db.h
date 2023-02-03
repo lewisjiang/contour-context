@@ -159,7 +159,7 @@ struct TreeBucket {
 struct LayerDB {
   const int min_elem_split_ = 100;
   const double imba_diff_ratio_ = 0.2; // if abs(size(i)-size(i+1))>ratio * max(,), we need to balance the two trees.
-  const int max_num_backets_ = 6;
+  const int max_num_backets_ = 6;  // number of trees per layer
   const int bucket_chann_ = 0; // the #th dimension of the retrieval key that is used as buckets.
 
   std::vector<TreeBucket> buckets_;
@@ -370,7 +370,8 @@ struct CandidateManager {
   /// \param anchor_pair "hint": the anchor for key and bci pairing
   /// \return
   CandidateScoreEnsemble checkCandWithHint(const std::shared_ptr<const ContourManager> &cm_cand,
-                                           const ConstellationPair &anchor_pair) {
+                                           const ConstellationPair &anchor_pair,
+                                           const ContourSimThresConfig &cont_sim) {
     DCHECK(flow_valve == 0);
     int cand_id = cm_cand->getIntID();
 //    CandSimScore curr_score;
@@ -382,7 +383,7 @@ struct CandidateManager {
     CandidateScoreEnsemble ret_score;
 
     // check: (1/4) anchor similarity
-    bool anchor_sim = ContourManager::checkContPairSim(*cm_cand, *cm_tgt_, anchor_pair);
+    bool anchor_sim = ContourManager::checkContPairSim(*cm_cand, *cm_tgt_, anchor_pair, cont_sim);
     if (!anchor_sim)
       return ret_score;
     cand_aft_check1++;
@@ -411,8 +412,8 @@ struct CandidateManager {
     std::vector<ConstellationPair> tmp_pairs2;
     std::vector<float> tmp_area_perc;
     ScorePairwiseSim ret_pairwise_sim = ContourManager::checkConstellCorrespSim(*cm_cand, *cm_tgt_, tmp_pairs1,
-                                                                                sim_var_.sim_pair, tmp_pairs2,
-                                                                                tmp_area_perc);
+                                                                                sim_var_.sim_pair, cont_sim,
+                                                                                tmp_pairs2, tmp_area_perc);
     ret_score.sim_pair = ret_pairwise_sim;
     if (ret_pairwise_sim.overall() < sim_var_.sim_pair.overall())
       return ret_score;
@@ -653,30 +654,34 @@ struct CandidateManager {
 };
 
 struct ContourDBConfig {
-  int num_trees_ = 6;  // max number of trees per layer
-  int max_candi_per_layer_ = 40;  // should we use different values for different layers?
-  int max_total_candi_ = 80;  // should we use different values for different layers?
-  KeyFloatType max_dist_sq_ = 200.0;
+//  int num_trees_ = 6;  // max number of trees per layer
+//  int max_candi_per_layer_ = 40;  // should we use different values for different layers?
+//  int max_total_candi_ = 80;  // should we use different values for different layers?
+//  KeyFloatType max_dist_sq_ = 200.0;
+  int nnk_ = 50;  //
+  int max_fine_opt_ = 10;
+  std::vector<int> q_levels_;  // the layers to generate anchors (Note the difference between `DIST_BIN_LAYERS`)
+
+  ContourSimThresConfig cont_sim_cfg_;
 };
 
 // manages the whole database of contours for place re-identification
 // top level database
 class ContourDB {
   const ContourDBConfig cfg_;
-  const std::vector<int> q_levels_;  // the layers to generate anchors (Note the difference between `DIST_BIN_LAYERS`)
 
   std::vector<LayerDB> layer_db_;
   std::vector<std::shared_ptr<const ContourManager>> all_bevs_;
 
 public:
-  ContourDB(const ContourDBConfig &config, std::vector<int> q_levels) : cfg_(config), q_levels_(std::move(q_levels)) {
-    layer_db_.resize(q_levels_.size());
+  ContourDB(const ContourDBConfig &config) : cfg_(config) {
+    layer_db_.resize(cfg_.q_levels_.size());
   }
 
-  // TODO: 1. query database
-  void queryKNN(const ContourManager &q_cont,
-                std::vector<std::shared_ptr<const ContourManager>> &cand_ptrs,
-                std::vector<KeyFloatType> &dist_sq) const;
+//  // TOxDO: 1. query database
+//  void queryKNN(const ContourManager &q_cont,
+//                std::vector<std::shared_ptr<const ContourManager>> &cand_ptrs,
+//                std::vector<KeyFloatType> &dist_sq) const; // outdated
 
   // TODO: unlike queryKNN, this one directly calculates relative transform and requires no post processing
   //  outside the function. The returned cmng are the matched ones.
@@ -708,9 +713,9 @@ public:
 
     // for each layer
 //    std::set<size_t> matched_gidx;
-    for (int ll = 0; ll < q_levels_.size(); ll++) {
-      const std::vector<BCI> &q_bcis = q_ptr->getLevBCI(q_levels_[ll]);
-      std::vector<RetrievalKey> q_keys = q_ptr->getLevRetrievalKey(q_levels_[ll]);
+    for (int ll = 0; ll < cfg_.q_levels_.size(); ll++) {
+      const std::vector<BCI> &q_bcis = q_ptr->getLevBCI(cfg_.q_levels_[ll]);
+      std::vector<RetrievalKey> q_keys = q_ptr->getLevRetrievalKey(cfg_.q_levels_[ll]);
       DCHECK_EQ(q_bcis.size(), q_keys.size());
       for (int seq = 0; seq < q_bcis.size(); seq++) {
         if (q_keys[seq].sum() != 0) {
@@ -740,7 +745,7 @@ public:
 
 
 //          layer_db_[ll].layerKNNSearch(q_keys[seq], 100, dist_ub, tmp_res);
-          layer_db_[ll].layerKNNSearch(q_keys[seq], 50, dist_ub, tmp_res);
+          layer_db_[ll].layerKNNSearch(q_keys[seq], cfg_.nnk_, dist_ub, tmp_res);
 //          layer_db_[ll].layerKNNSearch(q_keys[seq], 200, 2000.0, tmp_res);
           stp.record("KNN search");
           t1 += clk.toc();
@@ -754,7 +759,9 @@ public:
           for (const auto &sear_res: tmp_res) {
             clk.tic();
             auto cnt_chk_pass = cand_mng.checkCandWithHint(all_bevs_[sear_res.first.gidx],
-                                                           ConstellationPair(q_levels_[ll], sear_res.first.seq, seq));
+                                                           ConstellationPair(cfg_.q_levels_[ll], sear_res.first.seq,
+                                                                             seq),
+                                                           cfg_.cont_sim_cfg_);
             t2 += clk.toc();
           }
           stp.record("Constell");
@@ -764,7 +771,6 @@ public:
     }
 
     // find the best ones with fine-tuning:
-    const int max_fine_opt = 10;
     std::vector<std::shared_ptr<const ContourManager>> res_cand_ptr;
     std::vector<double> res_corr;
     std::vector<Eigen::Isometry2d> res_T;
@@ -772,7 +778,7 @@ public:
     clk.tic();
     stp.start();
     cand_mng.tidyUpCandidates();
-    int num_best_cands = cand_mng.fineOptimize(max_fine_opt, res_cand_ptr, res_corr, res_T);
+    int num_best_cands = cand_mng.fineOptimize(cfg_.max_fine_opt_, res_cand_ptr, res_corr, res_T);
     stp.record("L2 opt");
     t5 += clk.toc();
 
@@ -801,11 +807,11 @@ public:
 
   // TO-DO: 2. add a scan, and retrieval data to buffer
   void addScan(const std::shared_ptr<ContourManager> &added, double curr_timestamp) {
-    for (int ll = 0; ll < q_levels_.size(); ll++) {
+    for (int ll = 0; ll < cfg_.q_levels_.size(); ll++) {
       int seq = 0; // key seq in a layer for a given scan.
-      for (const auto &permu_key: added->getLevRetrievalKey(q_levels_[ll])) {
+      for (const auto &permu_key: added->getLevRetrievalKey(cfg_.q_levels_[ll])) {
         if (permu_key.sum() != 0)
-          layer_db_[ll].pushBuffer(permu_key, curr_timestamp, IndexOfKey(all_bevs_.size(), q_levels_[ll], seq));
+          layer_db_[ll].pushBuffer(permu_key, curr_timestamp, IndexOfKey(all_bevs_.size(), cfg_.q_levels_[ll], seq));
         seq++;
       }
     }
@@ -821,7 +827,7 @@ public:
     printf("Balancing bucket %d and %d\n", idx_t1, idx_t1 + 1);
 
     printf("Tree size of each bucket: \n");
-    for (int ll = 0; ll < q_levels_.size(); ll++) {
+    for (int ll = 0; ll < cfg_.q_levels_.size(); ll++) {
       printf("q_levels_[%d]: ", ll);
       layer_db_[ll].rebuild(idx_t1, curr_timestamp);
       for (int i = 0; i < layer_db_[ll].max_num_backets_; i++) {

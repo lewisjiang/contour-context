@@ -2,48 +2,26 @@
 // Created by lewis on 8/27/22.
 //
 
+#include <memory>
 #include <utility>
 
 #include "cont2/contour_db.h"
 #include "eval/evaluator.h"
 #include "cont2_ros/spinner_ros.h"
 #include "tools/bm_util.h"
+#include "tools/config_handler.h"
 
 const std::string PROJ_DIR = std::string(PJSRCDIR);
 
 SequentialTimeProfiler stp;
 
-std::string readDatasetID(const std::string &ksq_cfg_path) {
-  std::fstream infile;
-  infile.open(ksq_cfg_path, std::ios::in);
-  std::string res;
-
-  if (infile.rdstate() != std::ifstream::goodbit) {
-    std::cerr << "Error opening thres config file: " << ksq_cfg_path << std::endl;
-    return res;
-  }
-
-  std::string sbuf, pname;
-  while (std::getline(infile, sbuf)) {
-    std::istringstream iss(sbuf);
-    if (iss >> pname) {
-      std::cout << pname << std::endl;
-      if (pname[0] == '#')
-        continue;
-      if (pname == "ksq") {
-        iss >> res;
-      }
-    }
-  }
-  infile.close();
-  return res;
-}
-
 class BatchBinSpinner : public BaseROSSpinner {
   // --- Added members for evaluation and LC module running ---
-  ContourDB contour_db;
+  std::unique_ptr<ContourDB> ptr_contour_db;
+  std::unique_ptr<ContLCDEvaluator> ptr_evaluator;
 
-  ContLCDEvaluator evaluator;
+  ContourManagerConfig cm_config;
+  ContourDBConfig db_config;
 
   CandidateScoreEnsemble thres_lb_, thres_ub_;  // check thresholds
 
@@ -52,25 +30,75 @@ class BatchBinSpinner : public BaseROSSpinner {
   double ts_beg = -1;
 
 public:
-  explicit BatchBinSpinner(ros::NodeHandle &nh_, const ContourDBConfig &db_config, std::vector<int> q_levels,
-                           const std::string &fpath_pose,
-                           const std::string &fpath_laser) : BaseROSSpinner(nh_),
-                                                             contour_db(db_config, std::move(q_levels)),
-//                                                             evaluator(fpath_pose, fpath_laser, 0.960549) {
-//                                                             evaluator(fpath_pose, fpath_laser, 0.82515) {  // mf1 rs02
-                                                             evaluator(fpath_pose, fpath_laser, 0.64928) {  // mf1 k02
+  explicit BatchBinSpinner(ros::NodeHandle &nh_) : BaseROSSpinner(nh_) {  // mf1 k02
 
   }
 
   // before start: 1/1: load thres
-  void loadThres(const std::string &thres_fpath) {
-    ContLCDEvaluator::loadCheckThres(thres_fpath, thres_lb_, thres_ub_);
+  void loadConfig(const std::string &config_fpath, std::string &sav_path) {
+    cv::FileStorage fs;
+
+    printf("Loading parameters...\n");
+    fs.open(config_fpath, cv::FileStorage::READ);
+
+    std::string fpath_sens_gt_pose, fpath_lidar_bins;
+    double corr_thres;
+
+    loadOneConfig(fs, {"fpath_sens_gt_pose"}, fpath_sens_gt_pose);
+    loadOneConfig(fs, {"fpath_lidar_bins"}, fpath_lidar_bins);
+    loadOneConfig(fs, {"correlation_thres"}, corr_thres);
+    ptr_evaluator = std::make_unique<ContLCDEvaluator>(fpath_sens_gt_pose, fpath_lidar_bins, corr_thres);
+
+    loadOneConfig(fs, {"ContourDBConfig", "nnk_"}, db_config.nnk_);
+    loadOneConfig(fs, {"ContourDBConfig", "max_fine_opt_"}, db_config.max_fine_opt_);
+    loadSeqConfig(fs, {"ContourDBConfig", "q_levels_"}, db_config.q_levels_);
+
+    loadOneConfig(fs, {"ContourDBConfig", "ContourSimThresConfig", "ta_cell_cnt"}, db_config.cont_sim_cfg_.ta_cell_cnt);
+    loadOneConfig(fs, {"ContourDBConfig", "ContourSimThresConfig", "tp_cell_cnt"}, db_config.cont_sim_cfg_.tp_cell_cnt);
+    loadOneConfig(fs, {"ContourDBConfig", "ContourSimThresConfig", "tp_eigval"}, db_config.cont_sim_cfg_.tp_eigval);
+    loadOneConfig(fs, {"ContourDBConfig", "ContourSimThresConfig", "ta_h_bar"}, db_config.cont_sim_cfg_.ta_h_bar);
+    loadOneConfig(fs, {"ContourDBConfig", "ContourSimThresConfig", "ta_rcom"}, db_config.cont_sim_cfg_.ta_rcom);
+    loadOneConfig(fs, {"ContourDBConfig", "ContourSimThresConfig", "tp_rcom"}, db_config.cont_sim_cfg_.tp_rcom);
+    ptr_contour_db = std::make_unique<ContourDB>(db_config);
+
+    loadOneConfig(fs, {"thres_lb_", "i_ovlp_sum"}, thres_lb_.sim_constell.i_ovlp_sum);
+    loadOneConfig(fs, {"thres_lb_", "i_ovlp_max_one"}, thres_lb_.sim_constell.i_ovlp_max_one);
+    loadOneConfig(fs, {"thres_lb_", "i_in_ang_rng"}, thres_lb_.sim_constell.i_in_ang_rng);
+    loadOneConfig(fs, {"thres_lb_", "i_indiv_sim"}, thres_lb_.sim_pair.i_indiv_sim);
+    loadOneConfig(fs, {"thres_lb_", "i_orie_sim"}, thres_lb_.sim_pair.i_orie_sim);
+    loadOneConfig(fs, {"thres_lb_", "correlation"}, thres_lb_.sim_post.correlation);
+    loadOneConfig(fs, {"thres_lb_", "area_perc"}, thres_lb_.sim_post.area_perc);
+    loadOneConfig(fs, {"thres_lb_", "neg_est_dist"}, thres_lb_.sim_post.neg_est_dist);
+
+    loadOneConfig(fs, {"thres_ub_", "i_ovlp_sum"}, thres_ub_.sim_constell.i_ovlp_sum);
+    loadOneConfig(fs, {"thres_ub_", "i_ovlp_max_one"}, thres_ub_.sim_constell.i_ovlp_max_one);
+    loadOneConfig(fs, {"thres_ub_", "i_in_ang_rng"}, thres_ub_.sim_constell.i_in_ang_rng);
+    loadOneConfig(fs, {"thres_ub_", "i_indiv_sim"}, thres_ub_.sim_pair.i_indiv_sim);
+    loadOneConfig(fs, {"thres_ub_", "i_orie_sim"}, thres_ub_.sim_pair.i_orie_sim);
+    loadOneConfig(fs, {"thres_ub_", "correlation"}, thres_ub_.sim_post.correlation);
+    loadOneConfig(fs, {"thres_ub_", "area_perc"}, thres_ub_.sim_post.area_perc);
+    loadOneConfig(fs, {"thres_ub_", "neg_est_dist"}, thres_ub_.sim_post.neg_est_dist);
+
+    loadSeqConfig(fs, {"ContourManagerConfig", "lv_grads_"}, cm_config.lv_grads_);
+    loadOneConfig(fs, {"ContourManagerConfig", "reso_row_"}, cm_config.reso_row_);
+    loadOneConfig(fs, {"ContourManagerConfig", "reso_col_"}, cm_config.reso_col_);
+    loadOneConfig(fs, {"ContourManagerConfig", "n_row_"}, cm_config.n_row_);
+    loadOneConfig(fs, {"ContourManagerConfig", "n_col_"}, cm_config.n_col_);
+    loadOneConfig(fs, {"ContourManagerConfig", "lidar_height_"}, cm_config.lidar_height_);
+    loadOneConfig(fs, {"ContourManagerConfig", "blind_sq_"}, cm_config.blind_sq_);
+    loadOneConfig(fs, {"ContourManagerConfig", "min_cont_key_cnt_"}, cm_config.min_cont_key_cnt_);
+    loadOneConfig(fs, {"ContourManagerConfig", "min_cont_cell_cnt_"}, cm_config.min_cont_cell_cnt_);
+
+    loadOneConfig(fs, {"fpath_outcome_sav"}, sav_path);
+
+    fs.release();
   }
 
   ///
   /// \param outer_cnt
   /// \return 0: normal. <0: external signal. 1: load failed
   int spinOnce(int &outer_cnt) {
+    CHECK(ptr_contour_db && ptr_evaluator);
     mtx_status.lock();
     if (stat_terminated) {
       printf("Spin terminated by external signal.\n");
@@ -84,7 +112,7 @@ public:
     }
     mtx_status.unlock();
 
-    bool loaded = evaluator.loadNewScan();
+    bool loaded = ptr_evaluator->loadNewScan();
     if (!loaded) {
       printf("Load new scan failed.\n");
       return 1;
@@ -94,17 +122,12 @@ public:
     outer_cnt++;
 
     // 1. Init current scan
-    ContourManagerConfig cm_config;
-//    cm_config.lv_grads_ = {1.5, 2, 2.5, 3, 3.5, 4};  // KITTI
-//    cm_config.lv_grads_ = {1.5, 2.5, 3.5, 4.5, 5.5, 6.5};  // mulran test 1
-    cm_config.lv_grads_ = {1.0, 2.5, 4.0, 5.5, 7.0, 8.5};  // mulran used in paper
-//    cm_config.lv_grads_ = {1.5, 2.0, 3.0, 4.5, 6.0, 7.0};  // mulran
 
     stp.lap();
     stp.start();
-    std::shared_ptr<ContourManager> ptr_cm_tgt = evaluator.getCurrContourManager(cm_config);
+    std::shared_ptr<ContourManager> ptr_cm_tgt = ptr_evaluator->getCurrContourManager(cm_config);
     stp.record("make bev");
-    const auto laser_info_tgt = evaluator.getCurrScanInfo();
+    const auto laser_info_tgt = ptr_evaluator->getCurrScanInfo();
     printf("\n===\nLoaded: assigned seq: %d, bin path: %s\n", laser_info_tgt.seq, laser_info_tgt.fpath.c_str());
 
     // 1.1 Prepare and display info: gt/shifted pose, tf
@@ -113,7 +136,7 @@ public:
 
     Eigen::Isometry3d T_gt_curr = laser_info_tgt.sens_pose;
     Eigen::Vector3d time_translate(0, 0, 10);
-    time_translate = time_translate * (ts_curr - ts_beg) / 60;  // 1m per min
+    time_translate = time_translate * (ts_curr - ts_beg) / 60;  // 10m per min
     g_poses.insert(std::make_pair(laser_info_tgt.seq, GlobalPoseInfo(T_gt_curr, time_translate.z())));
 
 #if PUB_ROS_MSG
@@ -148,7 +171,7 @@ public:
     std::vector<Eigen::Isometry2d> bev_tfs;
 
     clk.tic();
-    contour_db.queryRangedKNN(ptr_cm_tgt, thres_lb_, thres_ub_, ptr_cands, cand_corr, bev_tfs);
+    ptr_contour_db->queryRangedKNN(ptr_cm_tgt, thres_lb_, thres_ub_, ptr_cands, cand_corr, bev_tfs);
     printf("%lu Candidates in %7.5fs: \n", ptr_cands.size(), clk.toc());
 
 //    if(laser_info_tgt.seq == 894){
@@ -159,9 +182,9 @@ public:
     CHECK(ptr_cands.size() < 2);
     PredictionOutcome pred_res;
     if (ptr_cands.empty())
-      pred_res = evaluator.addPrediction(ptr_cm_tgt, 0.0);
+      pred_res = ptr_evaluator->addPrediction(ptr_cm_tgt, 0.0);
     else {
-      pred_res = evaluator.addPrediction(ptr_cm_tgt, cand_corr[0], ptr_cands[0], bev_tfs[0]);
+      pred_res = ptr_evaluator->addPrediction(ptr_cm_tgt, cand_corr[0], ptr_cands[0], bev_tfs[0]);
       if (pred_res.tfpn == PredictionOutcome::TP || pred_res.tfpn == PredictionOutcome::FP) {
         new_lc_pairs.emplace_back(ptr_cm_tgt->getIntID(), ptr_cands[0]->getIntID());
         new_lc_tfp.emplace_back(pred_res.tfpn == PredictionOutcome::TP);
@@ -194,8 +217,8 @@ public:
         break;
     }
 
-    printf("TP Error mean: t:%7.4f m, r:%7.4f rad\n", evaluator.getTPMeanTrans(), evaluator.getTPMeanRot());
-    printf("TP Error rmse: t:%7.4f m, r:%7.4f rad\n", evaluator.getTPRMSETrans(), evaluator.getTPRMSERot());
+    printf("TP Error mean: t:%7.4f m, r:%7.4f rad\n", ptr_evaluator->getTPMeanTrans(), ptr_evaluator->getTPMeanRot());
+    printf("TP Error rmse: t:%7.4f m, r:%7.4f rad\n", ptr_evaluator->getTPRMSETrans(), ptr_evaluator->getTPRMSERot());
     printf("Accumulated tp poses: %d\n", cnt_tp);
     printf("Accumulated fn poses: %d\n", cnt_fn);
     printf("Accumulated fp poses: %d\n", cnt_fp);
@@ -203,10 +226,10 @@ public:
     stp.start();
     // 3. update database
     // add scan
-    contour_db.addScan(ptr_cm_tgt, laser_info_tgt.ts);
+    ptr_contour_db->addScan(ptr_cm_tgt, laser_info_tgt.ts);
     // balance
     clk.tic();
-    contour_db.pushAndBalance(laser_info_tgt.seq, laser_info_tgt.ts);
+    ptr_contour_db->pushAndBalance(laser_info_tgt.seq, laser_info_tgt.ts);
     stp.record("Update database");
     printf("Rebalance tree cost: %7.5f\n", clk.toc());
 
@@ -219,7 +242,7 @@ public:
   }
 
   void savePredictionResults(const std::string &sav_path) const {
-    evaluator.savePredictionResults(sav_path);
+    ptr_evaluator->savePredictionResults(sav_path);
   }
 
   inline int get_tp() const { return cnt_tp; }
@@ -248,17 +271,12 @@ int main(int argc, char **argv) {
 //  // Sav path
 //  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti00.txt";
 
-  std::string ksq = "08";
+//  std::string ksq = "08";
 
-  // read from config:
-  ksq = readDatasetID(PROJ_DIR + "/config/dataset_id.cfg");
-  printf("Using dataset: %s\n", ksq.c_str());
-  CHECK_NE(ksq, "");
-
-  // KITTI 08
-  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti" + ksq + ".txt";
-  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti" + ksq + ".txt";
-  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti" + ksq + ".txt";
+//  // KITTI 08
+//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti" + ksq + ".txt";
+//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti" + ksq + ".txt";
+//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti" + ksq + ".txt";
 //  // Check thres path
 //  std::string cand_score_config = PROJ_DIR + "/config/score_thres_kitti_bag_play.cfg";
 //
@@ -293,17 +311,17 @@ int main(int argc, char **argv) {
 //  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-mulran-dcc02.txt";
 //  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-mulran-dcc.txt";
 
-  stp = SequentialTimeProfiler(fpath_outcome_sav);
-
   // Check thres path
-  std::string cand_score_config = PROJ_DIR + "/config/score_thres_kitti_bag_play.cfg";
+//  std::string cand_score_config = PROJ_DIR + "/config/score_thres_kitti_bag_play.cfg";
+  std::string cand_score_config = "/home/lewis/catkin_ws2/src/contour-context/config/batch_bin_test_config.yaml";
 
   // Main process:
-  ContourDBConfig db_config;
-  std::vector<int> db_q_levels = {1, 2, 3};
+  BatchBinSpinner o(nh);
 
-  BatchBinSpinner o(nh, db_config, db_q_levels, fpath_sens_gt_pose, fpath_lidar_bins);
-  o.loadThres(cand_score_config);
+  std::string fpath_outcome_sav;
+  o.loadConfig(cand_score_config, fpath_outcome_sav);
+
+  stp = SequentialTimeProfiler(fpath_outcome_sav);
 
   ros::Rate rate(300);
   int cnt = 0;

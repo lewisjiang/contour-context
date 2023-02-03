@@ -1113,12 +1113,14 @@ public:
   /// \param tgt
   /// \param cstl_in
   /// \param lb
+  /// \param cont_sim
   /// \param cstl_out The filtered constellation
   /// \param area_perc The accompanying area percentage of each pair (at the level specified by the constell pair)
   /// \return
   static ScorePairwiseSim checkConstellCorrespSim(const ContourManager &src, const ContourManager &tgt,
                                                   const std::vector<ConstellationPair> &cstl_in,
                                                   const ScorePairwiseSim &lb,
+                                                  const ContourSimThresConfig &cont_sim,
                                                   std::vector<ConstellationPair> &cstl_out,
                                                   std::vector<float> &area_perc) {
     // cross level consensus (CLC)
@@ -1140,7 +1142,7 @@ public:
 //      if (ContourView::checkSim(*src.cont_views_[cstl_in[pr].level][cstl_in[pr].seq_src],
 //                                *tgt.cont_views_[cstl_in[pr].level][cstl_in[pr].seq_tgt]))
       bool curr_success = false;
-      if (checkContPairSim(src, tgt, pr)) {
+      if (checkContPairSim(src, tgt, pr, cont_sim)) {
         cstl_out.push_back(pr);
         auto &it = lev_frac[pr.level];
         it.first += src.cont_perc_[pr.level][pr.seq_src];
@@ -1271,9 +1273,10 @@ public:
   }
 
   inline static bool
-  checkContPairSim(const ContourManager &src, const ContourManager &tgt, const ConstellationPair &cstl) {
+  checkContPairSim(const ContourManager &src, const ContourManager &tgt, const ConstellationPair &cstl,
+                   const ContourSimThresConfig &cont_sim) {
     return ContourView::checkSim(*src.cont_views_[cstl.level][cstl.seq_src],
-                                 *tgt.cont_views_[cstl.level][cstl.seq_tgt]);
+                                 *tgt.cont_views_[cstl.level][cstl.seq_tgt], cont_sim);
   }
 
   static void

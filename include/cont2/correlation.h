@@ -13,7 +13,7 @@
 
 
 struct GMMOptConfig {
-  double max_corr_dist_ = 10.0; // in bev pixels
+//  double max_corr_dist_ = 10.0; // in bev pixels
   double min_area_perc_ = 0.95; // minimal percentage of area involved for each layer
   std::vector<int> levels_ = {1, 2, 3, 4}; // the layers to be considered in ellipse gmm.
   double cov_dilate_scale_ = 2.0;
