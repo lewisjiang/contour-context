@@ -7,27 +7,32 @@ ContourDBConfig:
   nnk_: 50
   max_fine_opt_: 10
   # NOTE: which levels ([1, 2, 3, 4]) to generate Keys is hardcoded.
-  q_levels_: [1, 2, 3]  #// the layers to query (Note the difference between `DIST_BIN_LAYERS`)
-  ContourSimThresConfig:   ## Thresholds for pairwise contour similarity:
+  q_levels_: [ 1, 2, 3 ]  #// the layers to query (Note the difference between `DIST_BIN_LAYERS`)
+  ContourSimThresConfig: ## Thresholds for pairwise contour similarity:
     ta_cell_cnt: 6.0
     tp_cell_cnt: 0.2
     tp_eigval: 0.2
-#    ta_h_bar: 0.3  # Used for KITTI
-    ta_h_bar: 0.75  # Used for Mulran
+    ta_h_bar: 0.3  # Used for KITTI
+#    ta_h_bar: 0.75  # Used for Mulran
     ta_rcom: 0.4
     tp_rcom: 0.25
+
+  TreeBucketConfig:
+    max_elapse_: 25.0  #// the max temporal delay before adding to the trees
+    min_elapse_: 15.0  #// the min temporal delay to wait before adding to the trees
+
 
 #####################################################
 # Part of parameters for generated contours
 ContourManagerConfig:
   # NOTE: which levels ([1, 2, 3, 4]) to generate Keys is hardcoded.
-#  lv_grads_: [1.5, 2, 2.5, 3, 3.5, 4]  # KITTI in paper
-  lv_grads_: [1.0, 2.5, 4.0, 5.5, 7.0, 8.5]  # mulran in paper
+  lv_grads_: [ 1.5, 2, 2.5, 3, 3.5, 4 ]  # KITTI in paper
+  #  lv_grads_: [1.0, 2.5, 4.0, 5.5, 7.0, 8.5]  # mulran in paper
   # {1.5, 2.5, 3.5, 4.5, 5.5, 6.5}; {1.5, 2.0, 3.0, 4.5, 6.0, 7.0};
 
   # TODO: reso other than 1.0
-#  reso_row_: 1.0
-#  reso_col_: 1.0
+  #  reso_row_: 1.0
+  #  reso_col_: 1.0
   n_row_: 150
   n_col_: 150
 
@@ -40,13 +45,13 @@ ContourManagerConfig:
 
 #####################################################
 # Data path info file and visualization similarity thres
-#fpath_sens_gt_pose: "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-sens_pose-kitti08.txt"
-#fpath_lidar_bins: "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-kitti08.txt"
-#fpath_outcome_sav: "/home/lewis/catkin_ws2/src/contour-context/results/outcome_txt/outcome-kitti08.txt"
+fpath_sens_gt_pose: "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-sens_pose-kitti08.txt"
+fpath_lidar_bins: "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-kitti08.txt"
+fpath_outcome_sav: "/home/lewis/catkin_ws2/src/contour-context/results/outcome_txt/outcome-kitti08.txt"
 
-fpath_sens_gt_pose: "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-sens_pose-kitti62.txt"
-fpath_lidar_bins: "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-kitti62.txt"
-fpath_outcome_sav: "/home/lewis/catkin_ws2/src/contour-context/results/outcome_txt/outcome-kitti62.txt"
+#fpath_sens_gt_pose: "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-sens_pose-kitti62.txt"
+#fpath_lidar_bins: "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-kitti62.txt"
+#fpath_outcome_sav: "/home/lewis/catkin_ws2/src/contour-context/results/outcome_txt/outcome-kitti62.txt"
 
 #fpath_sens_gt_pose: "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-sens_pose-mulran-rs02.txt"
 #fpath_lidar_bins: "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-mulran-rs02.txt"
@@ -57,7 +62,7 @@ correlation_thres: 0.64928  # sim score above this value will be plotted as posi
 
 #####################################################
 # variable query parameters
-thres_lb_:  # lower boundary
+thres_lb_: # lower boundary
   i_ovlp_sum: 3
   i_ovlp_max_one: 3
   i_in_ang_rng: 3
@@ -66,7 +71,7 @@ thres_lb_:  # lower boundary
   correlation: 0.3
   area_perc: 0.03
   neg_est_dist: -5.01
-thres_ub_:  # upper boundary
+thres_ub_: # upper boundary
   i_ovlp_sum: 6
   i_ovlp_max_one: 6
   i_in_ang_rng: 6
@@ -76,3 +81,14 @@ thres_ub_:  # upper boundary
   area_perc: 0.15
   neg_est_dist: -5.0
 
+#####################################################
+#
+#GMMOptConfig: # hardcoded
+
+#####################################################
+#
+#LayerDB Configurations: # hardcoded
+
+#####################################################
+#
+#Other Configurations: # hardcoded

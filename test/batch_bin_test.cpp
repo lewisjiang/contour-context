@@ -36,62 +36,64 @@ public:
 
   // before start: 1/1: load thres
   void loadConfig(const std::string &config_fpath, std::string &sav_path) {
-    cv::FileStorage fs;
 
     printf("Loading parameters...\n");
-    fs.open(config_fpath, cv::FileStorage::READ);
+    auto yl = yamlLoader(config_fpath);
 
     std::string fpath_sens_gt_pose, fpath_lidar_bins;
     double corr_thres;
 
-    loadOneConfig(fs, {"fpath_sens_gt_pose"}, fpath_sens_gt_pose);
-    loadOneConfig(fs, {"fpath_lidar_bins"}, fpath_lidar_bins);
-    loadOneConfig(fs, {"correlation_thres"}, corr_thres);
+    yl.loadOneConfig({"fpath_sens_gt_pose"}, fpath_sens_gt_pose);
+    yl.loadOneConfig({"fpath_lidar_bins"}, fpath_lidar_bins);
+    yl.loadOneConfig({"correlation_thres"}, corr_thres);
     ptr_evaluator = std::make_unique<ContLCDEvaluator>(fpath_sens_gt_pose, fpath_lidar_bins, corr_thres);
 
-    loadOneConfig(fs, {"ContourDBConfig", "nnk_"}, db_config.nnk_);
-    loadOneConfig(fs, {"ContourDBConfig", "max_fine_opt_"}, db_config.max_fine_opt_);
-    loadSeqConfig(fs, {"ContourDBConfig", "q_levels_"}, db_config.q_levels_);
+    yl.loadOneConfig({"ContourDBConfig", "nnk_"}, db_config.nnk_);
+    yl.loadOneConfig({"ContourDBConfig", "max_fine_opt_"}, db_config.max_fine_opt_);
+    yl.loadSeqConfig({"ContourDBConfig", "q_levels_"}, db_config.q_levels_);
 
-    loadOneConfig(fs, {"ContourDBConfig", "ContourSimThresConfig", "ta_cell_cnt"}, db_config.cont_sim_cfg_.ta_cell_cnt);
-    loadOneConfig(fs, {"ContourDBConfig", "ContourSimThresConfig", "tp_cell_cnt"}, db_config.cont_sim_cfg_.tp_cell_cnt);
-    loadOneConfig(fs, {"ContourDBConfig", "ContourSimThresConfig", "tp_eigval"}, db_config.cont_sim_cfg_.tp_eigval);
-    loadOneConfig(fs, {"ContourDBConfig", "ContourSimThresConfig", "ta_h_bar"}, db_config.cont_sim_cfg_.ta_h_bar);
-    loadOneConfig(fs, {"ContourDBConfig", "ContourSimThresConfig", "ta_rcom"}, db_config.cont_sim_cfg_.ta_rcom);
-    loadOneConfig(fs, {"ContourDBConfig", "ContourSimThresConfig", "tp_rcom"}, db_config.cont_sim_cfg_.tp_rcom);
+    yl.loadOneConfig({"ContourDBConfig", "TreeBucketConfig", "max_elapse_"}, db_config.tb_cfg_.max_elapse_);
+    yl.loadOneConfig({"ContourDBConfig", "TreeBucketConfig", "min_elapse_"}, db_config.tb_cfg_.min_elapse_);
+
+    yl.loadOneConfig({"ContourDBConfig", "ContourSimThresConfig", "ta_cell_cnt"}, db_config.cont_sim_cfg_.ta_cell_cnt);
+    yl.loadOneConfig({"ContourDBConfig", "ContourSimThresConfig", "tp_cell_cnt"}, db_config.cont_sim_cfg_.tp_cell_cnt);
+    yl.loadOneConfig({"ContourDBConfig", "ContourSimThresConfig", "tp_eigval"}, db_config.cont_sim_cfg_.tp_eigval);
+    yl.loadOneConfig({"ContourDBConfig", "ContourSimThresConfig", "ta_h_bar"}, db_config.cont_sim_cfg_.ta_h_bar);
+    yl.loadOneConfig({"ContourDBConfig", "ContourSimThresConfig", "ta_rcom"}, db_config.cont_sim_cfg_.ta_rcom);
+    yl.loadOneConfig({"ContourDBConfig", "ContourSimThresConfig", "tp_rcom"}, db_config.cont_sim_cfg_.tp_rcom);
     ptr_contour_db = std::make_unique<ContourDB>(db_config);
 
-    loadOneConfig(fs, {"thres_lb_", "i_ovlp_sum"}, thres_lb_.sim_constell.i_ovlp_sum);
-    loadOneConfig(fs, {"thres_lb_", "i_ovlp_max_one"}, thres_lb_.sim_constell.i_ovlp_max_one);
-    loadOneConfig(fs, {"thres_lb_", "i_in_ang_rng"}, thres_lb_.sim_constell.i_in_ang_rng);
-    loadOneConfig(fs, {"thres_lb_", "i_indiv_sim"}, thres_lb_.sim_pair.i_indiv_sim);
-    loadOneConfig(fs, {"thres_lb_", "i_orie_sim"}, thres_lb_.sim_pair.i_orie_sim);
-    loadOneConfig(fs, {"thres_lb_", "correlation"}, thres_lb_.sim_post.correlation);
-    loadOneConfig(fs, {"thres_lb_", "area_perc"}, thres_lb_.sim_post.area_perc);
-    loadOneConfig(fs, {"thres_lb_", "neg_est_dist"}, thres_lb_.sim_post.neg_est_dist);
+    yl.loadOneConfig({"thres_lb_", "i_ovlp_sum"}, thres_lb_.sim_constell.i_ovlp_sum);
+    yl.loadOneConfig({"thres_lb_", "i_ovlp_max_one"}, thres_lb_.sim_constell.i_ovlp_max_one);
+    yl.loadOneConfig({"thres_lb_", "i_in_ang_rng"}, thres_lb_.sim_constell.i_in_ang_rng);
+    yl.loadOneConfig({"thres_lb_", "i_indiv_sim"}, thres_lb_.sim_pair.i_indiv_sim);
+    yl.loadOneConfig({"thres_lb_", "i_orie_sim"}, thres_lb_.sim_pair.i_orie_sim);
+    yl.loadOneConfig({"thres_lb_", "correlation"}, thres_lb_.sim_post.correlation);
+    yl.loadOneConfig({"thres_lb_", "area_perc"}, thres_lb_.sim_post.area_perc);
+    yl.loadOneConfig({"thres_lb_", "neg_est_dist"}, thres_lb_.sim_post.neg_est_dist);
 
-    loadOneConfig(fs, {"thres_ub_", "i_ovlp_sum"}, thres_ub_.sim_constell.i_ovlp_sum);
-    loadOneConfig(fs, {"thres_ub_", "i_ovlp_max_one"}, thres_ub_.sim_constell.i_ovlp_max_one);
-    loadOneConfig(fs, {"thres_ub_", "i_in_ang_rng"}, thres_ub_.sim_constell.i_in_ang_rng);
-    loadOneConfig(fs, {"thres_ub_", "i_indiv_sim"}, thres_ub_.sim_pair.i_indiv_sim);
-    loadOneConfig(fs, {"thres_ub_", "i_orie_sim"}, thres_ub_.sim_pair.i_orie_sim);
-    loadOneConfig(fs, {"thres_ub_", "correlation"}, thres_ub_.sim_post.correlation);
-    loadOneConfig(fs, {"thres_ub_", "area_perc"}, thres_ub_.sim_post.area_perc);
-    loadOneConfig(fs, {"thres_ub_", "neg_est_dist"}, thres_ub_.sim_post.neg_est_dist);
+    yl.loadOneConfig({"thres_ub_", "i_ovlp_sum"}, thres_ub_.sim_constell.i_ovlp_sum);
+    yl.loadOneConfig({"thres_ub_", "i_ovlp_max_one"}, thres_ub_.sim_constell.i_ovlp_max_one);
+    yl.loadOneConfig({"thres_ub_", "i_in_ang_rng"}, thres_ub_.sim_constell.i_in_ang_rng);
+    yl.loadOneConfig({"thres_ub_", "i_indiv_sim"}, thres_ub_.sim_pair.i_indiv_sim);
+    yl.loadOneConfig({"thres_ub_", "i_orie_sim"}, thres_ub_.sim_pair.i_orie_sim);
+    yl.loadOneConfig({"thres_ub_", "correlation"}, thres_ub_.sim_post.correlation);
+    yl.loadOneConfig({"thres_ub_", "area_perc"}, thres_ub_.sim_post.area_perc);
+    yl.loadOneConfig({"thres_ub_", "neg_est_dist"}, thres_ub_.sim_post.neg_est_dist);
 
-    loadSeqConfig(fs, {"ContourManagerConfig", "lv_grads_"}, cm_config.lv_grads_);
-    loadOneConfig(fs, {"ContourManagerConfig", "reso_row_"}, cm_config.reso_row_);
-    loadOneConfig(fs, {"ContourManagerConfig", "reso_col_"}, cm_config.reso_col_);
-    loadOneConfig(fs, {"ContourManagerConfig", "n_row_"}, cm_config.n_row_);
-    loadOneConfig(fs, {"ContourManagerConfig", "n_col_"}, cm_config.n_col_);
-    loadOneConfig(fs, {"ContourManagerConfig", "lidar_height_"}, cm_config.lidar_height_);
-    loadOneConfig(fs, {"ContourManagerConfig", "blind_sq_"}, cm_config.blind_sq_);
-    loadOneConfig(fs, {"ContourManagerConfig", "min_cont_key_cnt_"}, cm_config.min_cont_key_cnt_);
-    loadOneConfig(fs, {"ContourManagerConfig", "min_cont_cell_cnt_"}, cm_config.min_cont_cell_cnt_);
+    yl.loadSeqConfig({"ContourManagerConfig", "lv_grads_"}, cm_config.lv_grads_);
+    yl.loadOneConfig({"ContourManagerConfig", "reso_row_"}, cm_config.reso_row_);
+    yl.loadOneConfig({"ContourManagerConfig", "reso_col_"}, cm_config.reso_col_);
+    yl.loadOneConfig({"ContourManagerConfig", "n_row_"}, cm_config.n_row_);
+    yl.loadOneConfig({"ContourManagerConfig", "n_col_"}, cm_config.n_col_);
+    yl.loadOneConfig({"ContourManagerConfig", "lidar_height_"}, cm_config.lidar_height_);
+    yl.loadOneConfig({"ContourManagerConfig", "blind_sq_"}, cm_config.blind_sq_);
+    yl.loadOneConfig({"ContourManagerConfig", "min_cont_key_cnt_"}, cm_config.min_cont_key_cnt_);
+    yl.loadOneConfig({"ContourManagerConfig", "min_cont_cell_cnt_"}, cm_config.min_cont_cell_cnt_);
 
-    loadOneConfig(fs, {"fpath_outcome_sav"}, sav_path);
+    yl.loadOneConfig({"fpath_outcome_sav"}, sav_path);
 
-    fs.release();
+    yl.close();
   }
 
   ///
@@ -261,55 +263,6 @@ int main(int argc, char **argv) {
   ros::NodeHandle nh;
 
   printf("batch bin test start\n");
-
-
-//  // Two file path
-//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti00.txt";
-//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti00.txt";
-//  // Check thres path
-//  std::string cand_score_config = PROJ_DIR + "/config/score_thres_kitti_bag_play.cfg";
-//  // Sav path
-//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti00.txt";
-
-//  std::string ksq = "08";
-
-//  // KITTI 08
-//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti" + ksq + ".txt";
-//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti" + ksq + ".txt";
-//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti" + ksq + ".txt";
-//  // Check thres path
-//  std::string cand_score_config = PROJ_DIR + "/config/score_thres_kitti_bag_play.cfg";
-//
-//  // KITTI 51: Mulran as KITTI, KAIST01
-//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti51.txt";
-//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti51.txt";
-//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti51.txt";
-
-//  // KITTI 62: Mulran as KITTI, RS02
-//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti62.txt";
-//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti62.txt";
-//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti62.txt";
-
-//  // KITTI 72: Mulran as KITTI, DCC02
-//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-kitti72.txt";
-//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-kitti72.txt";
-//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-kitti72.txt";
-
-
-//  // Mulran KAIST 01
-//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-mulran-kaist01.txt";
-//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-mulran-kaist01.txt";
-//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-mulran-kaist01.txt";
-
-//  // Mulran Riverside 02
-//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-mulran-rs02.txt";
-//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-mulran-rs02.txt";
-//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-mulran-rs02.txt";
-
-//  // Mulran DCC 02
-//  std::string fpath_sens_gt_pose = PROJ_DIR + "/sample_data/ts-sens_pose-mulran-dcc02.txt";
-//  std::string fpath_lidar_bins = PROJ_DIR + "/sample_data/ts-lidar_bins-mulran-dcc02.txt";
-//  std::string fpath_outcome_sav = PROJ_DIR + "/results/outcome_txt/outcome-mulran-dcc.txt";
 
   // Check thres path
 //  std::string cand_score_config = PROJ_DIR + "/config/score_thres_kitti_bag_play.cfg";

@@ -155,28 +155,30 @@ struct TreeBucket {
 
 };
 
-
+//! The manager of a bucket of kd-trees at a layer
 struct LayerDB {
-  const int min_elem_split_ = 100;
-  const double imba_diff_ratio_ = 0.2; // if abs(size(i)-size(i+1))>ratio * max(,), we need to balance the two trees.
-  const int max_num_backets_ = 6;  // number of trees per layer
-  const int bucket_chann_ = 0; // the #th dimension of the retrieval key that is used as buckets.
+  static const int min_elem_split_ = 100;
+  static constexpr double imba_diff_ratio_ = 0.2; // if abs(size(i)-size(i+1))>ratio * max(,), we need to balance the two trees.
+  static const int max_num_backets_ = 6;  // number of trees per layer
+  static const int bucket_chann_ = 0; // the #th dimension of the retrieval key that is used as buckets.
 
   std::vector<TreeBucket> buckets_;
-
   std::vector<KeyFloatType> bucket_ranges_;  // [min, max) pairs for buckets' range
-  LayerDB() {
+
+  explicit LayerDB(const TreeBucketConfig &tb_cfg) {
     bucket_ranges_.resize(max_num_backets_ + 1);
     bucket_ranges_.front() = -MAX_BUCKET_VAL;
     bucket_ranges_.back() = MAX_BUCKET_VAL;
-    buckets_.emplace_back(TreeBucketConfig(), -MAX_BUCKET_VAL, MAX_BUCKET_VAL);
+    buckets_.emplace_back(tb_cfg, -MAX_BUCKET_VAL, MAX_BUCKET_VAL);
 
     // empty buckets
     for (int i = 1; i < max_num_backets_; i++) {
       bucket_ranges_[i] = MAX_BUCKET_VAL;
-      buckets_.emplace_back(TreeBucketConfig(), MAX_BUCKET_VAL, MAX_BUCKET_VAL);
+      buckets_.emplace_back(tb_cfg, MAX_BUCKET_VAL, MAX_BUCKET_VAL);
     }
   }
+
+  LayerDB(const LayerDB &ldb) : buckets_(ldb.buckets_), bucket_ranges_(ldb.bucket_ranges_) {}
 
   // add buffer
   void pushBuffer(const RetrievalKey &layer_key, double ts, IndexOfKey scan_key_gidx) {
@@ -663,6 +665,7 @@ struct ContourDBConfig {
   std::vector<int> q_levels_;  // the layers to generate anchors (Note the difference between `DIST_BIN_LAYERS`)
 
   ContourSimThresConfig cont_sim_cfg_;
+  TreeBucketConfig tb_cfg_;
 };
 
 // manages the whole database of contours for place re-identification
@@ -675,7 +678,9 @@ class ContourDB {
 
 public:
   ContourDB(const ContourDBConfig &config) : cfg_(config) {
-    layer_db_.resize(cfg_.q_levels_.size());
+    for (auto i: cfg_.q_levels_)
+      layer_db_.emplace_back(TreeBucketConfig(cfg_.tb_cfg_));
+    CHECK(!cfg_.q_levels_.empty());
   }
 
 //  // TOxDO: 1. query database

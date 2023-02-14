@@ -14,8 +14,8 @@ add_definitions(-DPJSRCDIR=\"${PROJECT_SOURCE_DIR}/\")
 
 # Macro parameters 1: No effects on execution results
 add_definitions(-DHUMAN_READABLE=0)  # bool: whether to tidy up and print (too detailed) results to screen
-add_definitions(-DSAVE_MID_FILE=1)   # bool: whether to save intermediate files (unnecessary to the program)
-add_definitions(-DPUB_ROS_MSG=1)     # bool: whether to publish message to the program
+add_definitions(-DSAVE_MID_FILE=0)   # bool: whether to save intermediate files (unnecessary to the program)
+add_definitions(-DPUB_ROS_MSG=0)     # bool: whether to publish message to the program
 
 # Macro parameters 2: Affects execution results
 add_definitions(-DDYNAMIC_THRES=0)   # bool: whether to use dynamic threshold when checking (lift lower bound on the go)
@@ -49,8 +49,8 @@ find_package(OpenCV 4 REQUIRED)
 #find_package(OpenCV REQUIRED)
 #find_package(OpenCV 3 REQUIRED PATHS /home/lewis/.local/install_dir/opencv3.4.6/share NO_DEFAULT_PATH)
 
-#find_package(Ceres REQUIRED)
-find_package(Ceres 2 REQUIRED PATHS /home/lewis/.local/install_dir/ceres2.1/usr/local/lib/cmake NO_DEFAULT_PATH)
+find_package(Ceres 2 REQUIRED)
+#find_package(Ceres 2 REQUIRED PATHS /home/lewis/.local/install_dir/ceres2.1/usr/local/lib/cmake NO_DEFAULT_PATH)
 
 include_directories(
         include

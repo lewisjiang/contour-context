@@ -170,7 +170,7 @@ if __name__ == "__main__":
     # sav_1 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-sens_pose-kitti00.txt"
     # sav_2 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-kitti00.txt"
 
-    ksq = "62"
+    ksq = "08"
     # KITTI08
     # dir_lid_bin = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/%s/velodyne" % ksq
     # # dir_lid_bin = "/home/lewis/Downloads/datasets/sequences/velodyne"
@@ -213,7 +213,7 @@ if __name__ == "__main__":
     # sav_1 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-sens_pose-kitti72.txt"
     # sav_2 = "/home/lewis/catkin_ws2/src/contour-context/sample_data/ts-lidar_bins-kitti72.txt"
 
-    gen_kitti(dir_lid_bin, fp_pose, fp_times, fp_calib, sav_1, sav_2, 0)
+    gen_kitti(dir_lid_bin, fp_pose, fp_times, fp_calib, sav_1, sav_2)
 
     # =============================== Mulran Odometry ====================================
 
