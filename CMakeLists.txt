@@ -49,8 +49,8 @@ find_package(OpenCV 4 REQUIRED)
 #find_package(OpenCV REQUIRED)
 #find_package(OpenCV 3 REQUIRED PATHS /home/lewis/.local/install_dir/opencv3.4.6/share NO_DEFAULT_PATH)
 
-find_package(Ceres 2 REQUIRED)
-#find_package(Ceres 2 REQUIRED PATHS /home/lewis/.local/install_dir/ceres2.1/usr/local/lib/cmake NO_DEFAULT_PATH)
+#find_package(Ceres 2 REQUIRED)
+find_package(Ceres 2 REQUIRED PATHS /home/lewis/.local/install_dir/ceres2.1/usr/local/lib/cmake NO_DEFAULT_PATH)
 
 include_directories(
         include
@@ -84,7 +84,7 @@ add_library(${PROJECT_NAME}contops
         )
 
 target_link_libraries(${PROJECT_NAME}contops
-#        ${catkin_LIBRARIES}
+        #        ${catkin_LIBRARIES}
         ${PCL_LIBRARIES}
         ${glog_LIBRARIES}
         ${CERES_LIBRARIES}
@@ -190,3 +190,11 @@ target_link_libraries(${PROJECT_NAME}_batch_bin_test
 #        ${OpenCV_LIBS}
 #        )
 
+add_executable(${PROJECT_NAME}_kitti_reg
+        test/kitti_reg.cpp
+        src/eval/evaluator.cpp
+        )
+target_link_libraries(${PROJECT_NAME}_kitti_reg
+        ${PROJECT_NAME}contops
+        ${catkin_LIBRARIES}
+        )
