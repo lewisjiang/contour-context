@@ -64,9 +64,6 @@ void LoadKittiPose(const std::string &pose_file, const std::string &calib_file, 
 }
 
 class RegWorker {
-  std::unique_ptr<ContourDB> ptr_contour_db;
-//  std::unique_ptr<ContLCDEvaluator> ptr_evaluator;
-
   ContourManagerConfig cm_config;
   ContourDBConfig db_config;
 
@@ -100,7 +97,6 @@ public:
     yl.loadOneConfig({"ContourDBConfig", "ContourSimThresConfig", "ta_h_bar"}, db_config.cont_sim_cfg_.ta_h_bar);
     yl.loadOneConfig({"ContourDBConfig", "ContourSimThresConfig", "ta_rcom"}, db_config.cont_sim_cfg_.ta_rcom);
     yl.loadOneConfig({"ContourDBConfig", "ContourSimThresConfig", "tp_rcom"}, db_config.cont_sim_cfg_.tp_rcom);
-    ptr_contour_db = std::make_unique<ContourDB>(db_config);
 
     yl.loadOneConfig({"thres_lb_", "i_ovlp_sum"}, thres_lb_.sim_constell.i_ovlp_sum);
     yl.loadOneConfig({"thres_lb_", "i_ovlp_max_one"}, thres_lb_.sim_constell.i_ovlp_max_one);
@@ -134,32 +130,34 @@ public:
   }
 
   /// Keep the timestamp with enough distance manually or the tgt may exist in cache instead of DB.
-  /// \param ptr_src The new pose looking for a match.
-  /// \param ptr_tgt The old pose to be matched to.
-  /// \return
-  Eigen::Isometry3d
-  estimateTF(pcl::PointCloud<pcl::PointXYZI>::ConstPtr ptr_src, pcl::PointCloud<pcl::PointXYZI>::ConstPtr ptr_tgt) {
-    // prepare database
-    std::shared_ptr<ContourManager> cmng_ptr_tgt(new ContourManager(cm_config, 0));
-    cmng_ptr_tgt->makeBEV<pcl::PointXYZI>(ptr_tgt, "tgt_0");
-    cmng_ptr_tgt->makeContoursRecurs();
+  /// \param ptr_new The new pose looking for a match. (tgt in cont2)
+  /// \param ptr_old The old pose to be matched to. (src in cont2)
+  /// \return T_old_new
+  Eigen::Isometry3d estimateTF(pcl::PointCloud<pcl::PointXYZI>::ConstPtr ptr_new,
+                               pcl::PointCloud<pcl::PointXYZI>::ConstPtr ptr_old) const {
+    std::unique_ptr<ContourDB> ptr_contour_db;
+    ptr_contour_db = std::make_unique<ContourDB>(db_config);
 
-    ptr_contour_db->addScan(cmng_ptr_tgt, 0);
-    for (int i = 0; i < 10; i++)
-      ptr_contour_db->pushAndBalance(i, 50);
+    // prepare database
+    std::shared_ptr<ContourManager> cmng_ptr_old(new ContourManager(cm_config, 0));
+    cmng_ptr_old->makeBEV<pcl::PointXYZI>(ptr_old, "old_0");
+    cmng_ptr_old->makeContoursRecurs();
+
+    ptr_contour_db->addScan(cmng_ptr_old, 0);
+    ptr_contour_db->pushAndBalance(0, 50);
 
     // use new data.
-    std::shared_ptr<ContourManager> cmng_ptr_src(new ContourManager(cm_config, 1));
-    cmng_ptr_src->makeBEV<pcl::PointXYZI>(ptr_src, "src_0");
-    cmng_ptr_src->makeContoursRecurs();
+    std::shared_ptr<ContourManager> cmng_ptr_new(new ContourManager(cm_config, 1));
+    cmng_ptr_new->makeBEV<pcl::PointXYZI>(ptr_new, "new_0");
+    cmng_ptr_new->makeContoursRecurs();
 
     std::vector<std::pair<int, int>> new_lc_pairs;
     std::vector<bool> new_lc_tfp;
     std::vector<std::shared_ptr<const ContourManager>> ptr_cands;
     std::vector<double> cand_corr;
-    std::vector<Eigen::Isometry2d> bev_tfs;
+    std::vector<Eigen::Isometry2d> bev_tfs;  // T_new_old
 
-    ptr_contour_db->queryRangedKNN(cmng_ptr_src, thres_lb_, thres_ub_, ptr_cands, cand_corr, bev_tfs);
+    ptr_contour_db->queryRangedKNN(cmng_ptr_new, thres_lb_, thres_ub_, ptr_cands, cand_corr, bev_tfs);
     CHECK(ptr_cands.size() < 2);
 
     if (ptr_cands.empty()) {
@@ -171,13 +169,12 @@ public:
       Eigen::Isometry2d T_so_ssen = Eigen::Isometry2d::Identity(), T_to_tsen;  // {}_sensor in {}_bev_origin frame
       T_so_ssen.translate(V2D(cm_config.n_row_ / 2 - 0.5, cm_config.n_col_ / 2 - 0.5));
       T_to_tsen = T_so_ssen;
-      Eigen::Isometry2d T_tsen_ssen2_est = T_to_tsen.inverse() * bev_tfs[0] * T_so_ssen;
+      Eigen::Isometry2d T_tsen_ssen2_est = T_to_tsen.inverse() * bev_tfs[0].inverse() * T_so_ssen;
       T_tsen_ssen2_est.translation() *= cm_config.reso_row_;
 
       Eigen::Isometry3d T_res = Eigen::Isometry3d::Identity();
       Eigen::Matrix3d T_rot_3d = Eigen::Matrix3d::Identity();
       T_rot_3d.topLeftCorner<2, 2>() = T_tsen_ssen2_est.rotation();  // rotate around z axis
-      std::cout << T_rot_3d << std::endl;
       T_res.rotate(Eigen::Quaterniond(T_rot_3d));
       T_res.pretranslate(Eigen::Vector3d(T_tsen_ssen2_est.translation().x(), T_tsen_ssen2_est.translation().y(), 0));
       return T_res;
@@ -197,7 +194,12 @@ int main(int argc, char **argv) {
   std::string pose_path = "/media/lewis/S7/Datasets/sematic_kitti/odometry/dataset/sequences/00/poses.txt";
   std::string calib_path = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/00/calib.txt";
 
-  for (int i = 0; i < 20; i++) {
+  RegWorker worker;
+  const std::string config_path = PROJ_DIR + "/config/kitti_reg_test_config.yaml";
+  worker.loadConfig(config_path);
+
+  for (int i = 1; i < 2; i++) {
+    // different cont2 lib, here src means new, tgt means old
     int src_idx = i, dst_idx = 0;
     std::stringstream lidar_data_path;
     lidar_data_path << lidar_path << std::setfill('0') << std::setw(6) << src_idx << ".bin";
@@ -210,17 +212,12 @@ int main(int argc, char **argv) {
     LoadKittiPose(pose_path, calib_path, poses);
     std::cout << "Sucessfully load pose with number: " << poses.size() << std::endl;
 
-    Eigen::Matrix4d T_ts_gt = poses[dst_idx] * poses[src_idx].inverse();
+    Eigen::Matrix4d T_ts_gt = poses[dst_idx].inverse() * poses[src_idx];
 
     std::cout << "T_src:\n" << poses[src_idx] << std::endl;
     std::cout << "T_tgt:\n" << poses[dst_idx] << std::endl;
 
     // start registration:
-    const std::string config_path = PROJ_DIR + "/config/kitti_reg_test_config.yaml";
-
-    RegWorker worker;
-    worker.loadConfig(config_path);
-
     Eigen::Isometry3d T_est = worker.estimateTF(src_data, tgt_data);
     std::cout << "T_est:\n" << T_est.matrix() << std::endl;
     std::cout << "T_gt:\n" << T_ts_gt.matrix() << std::endl;
