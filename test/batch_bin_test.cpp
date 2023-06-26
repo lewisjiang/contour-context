@@ -90,6 +90,9 @@ public:
     yl.loadOneConfig({"ContourManagerConfig", "blind_sq_"}, cm_config.blind_sq_);
     yl.loadOneConfig({"ContourManagerConfig", "min_cont_key_cnt_"}, cm_config.min_cont_key_cnt_);
     yl.loadOneConfig({"ContourManagerConfig", "min_cont_cell_cnt_"}, cm_config.min_cont_cell_cnt_);
+    yl.loadOneConfig({"ContourManagerConfig", "piv_firsts_"}, cm_config.piv_firsts_);
+    yl.loadOneConfig({"ContourManagerConfig", "dist_firsts_"}, cm_config.dist_firsts_);
+    yl.loadOneConfig({"ContourManagerConfig", "roi_radius_"}, cm_config.roi_radius_);
 
     yl.loadOneConfig({"fpath_outcome_sav"}, sav_path);
 
@@ -266,7 +269,7 @@ int main(int argc, char **argv) {
 
   // Check thres path
 //  std::string cand_score_config = PROJ_DIR + "/config/score_thres_kitti_bag_play.cfg";
-  std::string cand_score_config = "/home/lewis/catkin_ws2/src/contour-context/config/batch_bin_test_config.yaml";
+  std::string cand_score_config = PROJ_DIR + "/config/batch_bin_test_config.yaml";
 
   // Main process:
   BatchBinSpinner o(nh);
