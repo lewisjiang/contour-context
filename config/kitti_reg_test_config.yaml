@@ -9,13 +9,13 @@ ContourDBConfig:
   # NOTE: which levels ([1, 2, 3, 4]) to generate Keys is hardcoded.
   q_levels_: [ 1, 2, 3 ]  #// the layers to query (Note the difference between `DIST_BIN_LAYERS`)
   ContourSimThresConfig: ## Thresholds for pairwise contour similarity:
-    ta_cell_cnt: 6.0
-    tp_cell_cnt: 0.2
-    tp_eigval: 0.2
-    ta_h_bar: 0.3  # Used for KITTI
+    ta_cell_cnt: 12.0
+    tp_cell_cnt: 0.35
+    tp_eigval: 0.5
+    ta_h_bar: 0.7  # Used for KITTI
 #    ta_h_bar: 0.75  # Used for Mulran
-    ta_rcom: 0.4
-    tp_rcom: 0.25
+    ta_rcom: 1.5
+    tp_rcom: 0.6
 
   TreeBucketConfig:
     max_elapse_: 2.0  #// the max temporal delay before adding to the trees
@@ -33,14 +33,18 @@ ContourManagerConfig:
   # TODO: reso other than 1.0
   #  reso_row_: 1.0
   #  reso_col_: 1.0
-  n_row_: 150
-  n_col_: 150
+  n_row_: 180
+  n_col_: 180
 
   lidar_height_: 2.0   # ground assumption
-  blind_sq_: 9.0
+  blind_sq_: 6.0
 
   min_cont_key_cnt_: 9  # minimal the cell count to calculate a valid key around an anchor contour
   min_cont_cell_cnt_: 3  # the minimal cell cnt to consider creating a contour
+
+  piv_firsts_: 15  # the top x contours to be treated as anchor CAs
+  dist_firsts_: 15  # the top x contours to be treated as peripheral CAs
+  roi_radius_: 10.0  # RoI radius around the center of anchor
 
 
 #####################################################
@@ -67,19 +71,19 @@ thres_lb_: # lower boundary
   i_ovlp_max_one: 3
   i_in_ang_rng: 3
   i_indiv_sim: 3
-  i_orie_sim: 4
-  correlation: 0.3
-  area_perc: 0.03
-  neg_est_dist: -5.01
+  i_orie_sim: 3
+  correlation: 0.2
+  area_perc: 0.02
+  neg_est_dist: -25.01
 thres_ub_: # upper boundary
-  i_ovlp_sum: 6
-  i_ovlp_max_one: 6
-  i_in_ang_rng: 6
-  i_indiv_sim: 6
-  i_orie_sim: 6
-  correlation: 0.75
-  area_perc: 0.15
-  neg_est_dist: -5.0
+  i_ovlp_sum: 4
+  i_ovlp_max_one: 4
+  i_in_ang_rng: 4
+  i_indiv_sim: 4
+  i_orie_sim: 4
+  correlation: 0.55
+  area_perc: 0.05
+  neg_est_dist: -25.0
 
 #####################################################
 #

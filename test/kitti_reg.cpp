@@ -125,6 +125,9 @@ public:
     yl.loadOneConfig({"ContourManagerConfig", "blind_sq_"}, cm_config.blind_sq_);
     yl.loadOneConfig({"ContourManagerConfig", "min_cont_key_cnt_"}, cm_config.min_cont_key_cnt_);
     yl.loadOneConfig({"ContourManagerConfig", "min_cont_cell_cnt_"}, cm_config.min_cont_cell_cnt_);
+    yl.loadOneConfig({"ContourManagerConfig", "piv_firsts_"}, cm_config.piv_firsts_);
+    yl.loadOneConfig({"ContourManagerConfig", "dist_firsts_"}, cm_config.dist_firsts_);
+    yl.loadOneConfig({"ContourManagerConfig", "roi_radius_"}, cm_config.roi_radius_);
 
     yl.close();
   }
@@ -190,17 +193,41 @@ int main(int argc, char **argv) {
   ros::init(argc, argv, "kitti_reg_test");
   ros::NodeHandle nh;
 
-  std::string lidar_path = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/00/velodyne/";
-  std::string pose_path = "/media/lewis/S7/Datasets/sematic_kitti/odometry/dataset/sequences/00/poses.txt";
-  std::string calib_path = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/00/calib.txt";
+  const std::string lidar_path = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/00/velodyne/";
+  const std::string pose_path = "/media/lewis/S7/Datasets/sematic_kitti/odometry/dataset/sequences/00/poses.txt";
+  const std::string calib_path = "/media/lewis/S7/Datasets/kitti/odometry/dataset/sequences/00/calib.txt";
+  const std::string pair_path = PROJ_DIR + "/sample_data/kitti00_10to15.txt";
 
   RegWorker worker;
   const std::string config_path = PROJ_DIR + "/config/kitti_reg_test_config.yaml";
   worker.loadConfig(config_path);
 
-  for (int i = 1; i < 2; i++) {
+  std::vector<std::pair<int, int>> pairs_to_test;
+
+  std::fstream pair_file;
+  pair_file.open(pair_path);
+  int pair_idx[2];
+  std::string sbuf;
+  while (std::getline(pair_file, sbuf)) {
+    std::cout << sbuf << std::endl;
+    std::istringstream iss(sbuf);
+
+    try {
+      for (auto &d: pair_idx)
+        if (!(iss >> d)) throw "invalid line format, terminating...";
+    }
+    catch (const char* msg) {
+      std::cout << msg << std::endl;
+      break;
+    }
+    pairs_to_test.emplace_back(pair_idx[0], pair_idx[1]);
+  }
+  int cnt_all = pairs_to_test.size(), cnt_det = 0;
+
+  for (int i = 0; i < cnt_all; i++) {
     // different cont2 lib, here src means new, tgt means old
-    int src_idx = i, dst_idx = 0;
+    int src_idx = pairs_to_test[i].second, dst_idx = pairs_to_test[i].first;
+    printf("\n====================\n%d - %d:\n", dst_idx, src_idx);
     std::stringstream lidar_data_path;
     lidar_data_path << lidar_path << std::setfill('0') << std::setw(6) << src_idx << ".bin";
     pcl::PointCloud<pcl::PointXYZI>::ConstPtr src_data = readKITTIPointCloudBin<pcl::PointXYZI>(lidar_data_path.str());
@@ -222,9 +249,14 @@ int main(int argc, char **argv) {
     std::cout << "T_est:\n" << T_est.matrix() << std::endl;
     std::cout << "T_gt:\n" << T_ts_gt.matrix() << std::endl;
     printf("Est error %d-%d:\n", src_idx, dst_idx);
-    std::cout << T_ts_gt * (T_est.matrix().inverse()) << std::endl;
+    Eigen::Matrix4d T_err = T_ts_gt * (T_est.matrix().inverse());
+    std::cout << T_err << std::endl;
+
+    if (T_err.block<3, 1>(0, 3).norm() < 2.0)
+      cnt_det++;
   }
 
+  printf("Detected %d/%d, %.2f%%\n", cnt_det, cnt_all, 100.0 * cnt_det / cnt_all);
 
   return 0;
 
