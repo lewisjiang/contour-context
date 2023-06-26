@@ -42,6 +42,10 @@ ContourManagerConfig:
   min_cont_key_cnt_: 9  # minimal the cell count to calculate a valid key around an anchor contour
   min_cont_cell_cnt_: 3  # the minimal cell cnt to consider creating a contour
 
+  piv_firsts_: 6  # the top x contours to be treated as anchor CAs
+  dist_firsts_: 10  # the top x contours to be treated as peripheral CAs
+  roi_radius_: 10.0  # RoI radius around the center of anchor
+
 
 #####################################################
 # Data path info file and visualization similarity thres

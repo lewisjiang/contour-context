@@ -103,6 +103,10 @@ struct ContourManagerConfig {
 //  int cont_cnt_thres_ = 5; // the cell count threshold dividing a shaped blob from a point
   int min_cont_key_cnt_ = 9;  // minimal the cell count to calculate a valid key around an anchor contour
   int min_cont_cell_cnt_ = 3; // the minimal cell cnt to consider creating a contour
+
+  int piv_firsts_ = 6;  // the top x contours to be treated as anchor CAs
+  int dist_firsts_ = 10;  // the top x contours to be treated as peripheral CAs
+  float roi_radius_ = 10.0f;  // RoI radius around the center of anchor
 };
 
 const int16_t BITS_PER_LAYER = 64;
@@ -683,16 +687,16 @@ public:
 //    }
 
     /// case 2: new key making: from a pivot contour
-    const int piv_firsts = 6;
-    const int dist_firsts = 10;
-    const float roi_radius = 10.0f;
-    const int roi_radius_padded = std::ceil(roi_radius + 1);
+//    const int piv_firsts = 6;
+//    const int dist_firsts = 10;
+//    const float roi_radius = 10.0f;
+    const int roi_radius_padded = std::ceil(cfg_.roi_radius_ + 1);
     for (int ll = 0; ll < cfg_.lv_grads_.size(); ll++) {
 //      cv::Mat mask;
 //      cv::threshold(bev_, mask, cfg_.lv_grads_[ll], 123,
 //                    cv::THRESH_TOZERO); // mask is same type and dimension as bev_
       int accumulate_cell_cnt = 0;
-      for (int seq = 0; seq < piv_firsts; seq++) {
+      for (int seq = 0; seq < cfg_.piv_firsts_; seq++) {
         RetrievalKey key;
         key.setZero();
 
@@ -710,13 +714,13 @@ public:
           int c_min = std::max(0, c_cen - roi_radius_padded),
               c_max = std::min(cfg_.n_col_ - 1, c_cen + roi_radius_padded);
 
-          int num_bins = 7;
-          KeyFloatType bin_len = roi_radius / num_bins;
+          int num_bins = RET_KEY_DIM - 3;
+          KeyFloatType bin_len = cfg_.roi_radius_ / num_bins;
           std::vector<KeyFloatType> ring_bins(num_bins, 0);
 
           int div_per_bin = 5;
           std::vector<KeyFloatType> discrete_divs(div_per_bin * num_bins, 0);
-          KeyFloatType div_len = roi_radius / (num_bins * div_per_bin);
+          KeyFloatType div_len = cfg_.roi_radius_ / (num_bins * div_per_bin);
           int cnt_point = 0;
 
           RunningStatRecorder rec_tmp; // for case 3
@@ -725,7 +729,7 @@ public:
 //          bool vis_data = (ll == 2 && seq == 0 && int_id_ == 1648);
 //          if (vis_data) { printf("\n=== vis: \n"); }
 //          std::vector<KeyFloatType> dense_divs(140, 0);
-//          KeyFloatType ddiv_len = roi_radius / (140);
+//          KeyFloatType ddiv_len = cfg_.roi_radius_ / (140);
 
 
           for (int rr = r_min; rr <= r_max; rr++) {
@@ -743,13 +747,13 @@ public:
 //              KeyFloatType dist = (pillar_pos2f_.at(rr * cfg_.n_col_ + cc) - v_cen).norm();
 
               // case 1: ring, height, 7
-//              if (dist < roi_radius - 1e-2 && bev_(rr, cc) > cfg_.lv_grads_[0]) {  // add gaussian to bins
+//              if (dist < cfg_.roi_radius_ - 1e-2 && bev_(rr, cc) > cfg_.lv_grads_[0]) {  // add gaussian to bins
 //                int bin_idx = int(dist / bin_len);
 //                ring_bins[bin_idx] += bev_(rr, cc);    // no gaussian
 //              }
 
               // case 2: gmm, normalized
-              if (dist < roi_radius - 1e-2 && bev_(rr, cc) > cfg_.lv_grads_[DIST_BIN_LAYERS[0]]) { // imprv key variance
+              if (dist < cfg_.roi_radius_ - 1e-2 && bev_(rr, cc) > cfg_.lv_grads_[DIST_BIN_LAYERS[0]]) { // imprv key variance
 //                int higher_cnt = 1; // number of levels spanned by this pixel
 //                for (int ele = ll + 1; ele < cfg_.lv_grads_.size(); ele++)
                 int higher_cnt = 0;
@@ -771,7 +775,7 @@ public:
               }
 
 //              // case 3: using another ellipse
-//              if (dist < roi_radius - 1e-2 && bev_(rr, cc) > cfg_.lv_grads_[ll]) {
+//              if (dist < cfg_.roi_radius_ - 1e-2 && bev_(rr, cc) > cfg_.lv_grads_[ll]) {
 //                auto pos2f = pillar_pos2f_.at(rr * cfg_.n_col_ + cc);
 //                rec_tmp.runningStatsF(pos2f.x(), pos2f.y(), bev_(rr, cc));
 //              }
@@ -843,7 +847,7 @@ public:
           // hard coded
           for (int bl = 0; bl < NUM_BIN_KEY_LAYER; bl++) {
             int bit_offset = bl * BITS_PER_LAYER;
-            for (int j = 0; j < std::min(dist_firsts, (int) cont_views_[DIST_BIN_LAYERS[bl]].size()); j++) {
+            for (int j = 0; j < std::min(cfg_.dist_firsts_, (int) cont_views_[DIST_BIN_LAYERS[bl]].size()); j++) {
               if (ll != DIST_BIN_LAYERS[bl] || j != seq) {
                 V2F vec_cc =
                     cont_views_[DIST_BIN_LAYERS[bl]][j]->pos_mean_ - cont_views_[ll][seq]->pos_mean_;
@@ -891,8 +895,8 @@ public:
     }
 
     for (int ll = 0; ll < cfg_.lv_grads_.size(); ll++) {
-      DCHECK_EQ(layer_keys_[ll].size(), piv_firsts);
-      DCHECK_EQ(layer_key_bcis_[ll].size(), piv_firsts);
+      DCHECK_EQ(layer_keys_[ll].size(), cfg_.piv_firsts_);
+      DCHECK_EQ(layer_key_bcis_[ll].size(), cfg_.piv_firsts_);
     }
 
     // print top 2 features in each
