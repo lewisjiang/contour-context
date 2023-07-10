@@ -14,14 +14,17 @@ This is the official code repository of "**Contour Context: Abstract Structural 
 If you find this work useful, please consider citing our paper:
 
 ```
-@article{jiang2023contour,
+@inproceedings{jiang2023contour,
+address     = {London, United Kingdom},
 title       = {Contour Context: Abstract Structural Distribution for 3D LiDAR Loop Detection and Metric Pose Estimation},
-number      = {arXiv:2302.06149},
-publisher   = {arXiv},
+ISBN        = {9798350323658},
+DOI         = {10.1109/ICRA48891.2023.10160337},
+booktitle   = {2023 IEEE International Conference on Robotics and Automation (ICRA)},
 author      = {Jiang, Binqian and Shen, Shaojie},
 year        = {2023},
-month       = Feb,
+pages       = {8386–8392}
 }
+
 ```
 
 
