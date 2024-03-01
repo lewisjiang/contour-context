@@ -126,7 +126,7 @@ def get_points_ours2(fp_gt_sens_poses, fp_outcome):
                 fp += 1
 
             fn = 0
-            for j in range(i, est.shape[0]):
+            for j in range(i + 1, est.shape[0]):
                 if est[j, 2]:
                     fn += 1
 
