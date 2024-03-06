@@ -6,7 +6,8 @@
 ContourDBConfig:
   nnk_: 50
   max_fine_opt_: 10
-  # NOTE: which levels ([1, 2, 3, 4]) to generate Keys is hardcoded.
+  # NOTE: which levels ([1, 2, 3, 4]) to generate Keys is hardcoded in contour_mng.h, which levels ([1, 2, 3, 4]) to
+  # generate GMM is hardcoded in correlation.h. #FIXME
   q_levels_: [ 1, 2, 3 ]  #// the layers to query (Note the difference between `DIST_BIN_LAYERS`)
   ContourSimThresConfig: ## Thresholds for pairwise contour similarity:
     ta_cell_cnt: 6.0
